@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f4c45">
+<meta name="robots" content="noindex">
+<title>Carnet Clair</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f5f4ef;--card:#fff;--ink:#17231f;--mut:#66726d;--line:#dcdcd2;--g:#0f4c45;--gt:#e3efe9;--o:#b9770e;--ot:#f8ecd3;--r:#b3372b;--rt:#f7e0dc;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root{--bg:#121a17;--card:#1a2420;--ink:#e9efe9;--mut:#9aa8a1;--line:#2c3a35;--g:#6fd0bd;--gt:#1b3a34;--o:#e3a64a;--ot:#3a2e14;--r:#f08a7d;--rt:#3d1f1b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 "Bricolage Grotesque",system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1,h2,h3{margin:0;font-weight:800;letter-spacing:-.01em}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 14px;min-height:42px}
+button.p{background:var(--g);color:var(--bg);border-color:var(--g);font-weight:600}
+button.d{color:var(--r)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--o);outline-offset:2px}
+input,select,textarea{width:100%;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:10px;min-height:44px}
+label{display:block;font-size:14px;color:var(--mut);margin:10px 0 4px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px}
+.hero{background:var(--g);color:var(--bg);border-radius:18px;padding:20px;margin-bottom:14px}
+.hero small{opacity:.8}
+.hero .big{font-size:clamp(30px,9vw,46px);font-weight:800;line-height:1.1;margin:2px 0 10px}
+.row3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.row3 div{background:rgba(255,255,255,.12);border-radius:10px;padding:8px 10px;font-size:13px}
+.row3 b{display:block;font-size:15px}
+.bar{display:flex;gap:8px;margin:12px 0}
+.list{display:grid;gap:8px}
+.item{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;width:100%;text-align:left}
+.amt{font-weight:800;white-space:nowrap}
+.tag{display:inline-block;font-size:12px;border-radius:99px;padding:2px 9px;font-weight:600}
+.ok{background:var(--gt);color:var(--g)}.wait{background:var(--ot);color:var(--o)}.late{background:var(--rt);color:var(--r)}
+.mut{color:var(--mut);font-size:14px}
+.sec{margin:20px 0 8px;display:flex;justify-content:space-between;align-items:center}
+.empty{border:1px dashed var(--line);border-radius:12px;padding:18px;text-align:center;color:var(--mut)}
+dialog{border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);width:min(520px,94vw);padding:18px;max-height:90vh;overflow:auto}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ln{display:grid;grid-template-columns:2fr 1fr 1.4fr;gap:6px;margin-bottom:6px}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+table{width:100%;border-collapse:collapse;font-size:15px}
+td,th{padding:6px 4px;text-align:left;border-bottom:1px solid var(--line)}
+td:last-child,th:last-child{text-align:right}
+.wrap{overflow-x:auto}
+.chk{display:flex;gap:8px;align-items:flex-start;color:var(--ink);font-size:14px}
+.chk input{width:auto;min-height:0;margin-top:4px}
+@media print{body *{visibility:hidden}#inv,#inv *{visibility:visible}#inv{position:absolute;left:0;top:0;width:100%;color:#000}}
+</style>
+</head>
+<body>
+<main id="app"><p class="mut">Chargement…</p></main>
+<dialog id="dlg"></dialog>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+"use strict";
+/* ====== CONFIGURATION : remplacez ces deux lignes (voir GUIDE.md) ====== */
+const SUPABASE_URL = "https://mphphohljjpqjwnrpuld.supabase.co";
+const SUPABASE_KEY = "sb_publishable_Jz2Kt1WlETaj8tSbzbom0w_yZ5SEB-J";
+/* ======================================================================= */
+
+let sb = null, user = null, sub = null, isAdm = false, cid = null, cfgS = "", tab = "client";
+let S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" };
+let syn = { clients: {}, invoices: {}, payments: {} };
+const $ = s => document.querySelector(s);
+const app = h => { $("#app").innerHTML = h; };
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const today = () => new Date().toISOString().slice(0, 10);
+const fd = d => d ? d.split("-").reverse().join("/") : "";
+const fmt = n => Math.round(n).toLocaleString("fr-FR").replace(/[\u202f\u00a0]/g, " ") + " " + S.cur;
+const tot = i => i.items.reduce((a, l) => a + l.q * l.p, 0);
+const uuid = () => crypto.randomUUID();
+
+/* ---------- Abonnement ---------- */
+function subInfo() {
+  if (!sub) return { ok: true, text: "", cls: "ok" };
+  const t = Date.parse(sub.trial_ends), p = sub.paid_until ? Date.parse(sub.paid_until) : 0;
+  const end = Math.max(t, p), days = Math.ceil((end - Date.now()) / 864e5);
+  if (end < Date.now()) return { ok: false, text: "Abonnement expiré : lecture seule. Contactez le prestataire pour renouveler.", cls: "late" };
+  return { ok: true, text: (p >= t ? "Abonnement actif jusqu'au " : "Essai gratuit jusqu'au ") + fd(new Date(end).toISOString().slice(0, 10)) + " (" + days + " j)", cls: days <= 5 ? "wait" : "ok" };
+}
+const active = () => subInfo().ok;
+
+/* ---------- Calculs ---------- */
+function calc(id) {
+  const inv = S.invoices.filter(i => i.cid === id).sort((a, b) => a.date < b.date ? -1 : 1);
+  let pool = S.payments.filter(p => p.cid === id).reduce((a, p) => a + p.amt, 0);
+  const paidAll = pool; let billed = 0, due = 0, late = 0;
+  inv.forEach(i => {
+    i.total = tot(i); i.paid = Math.min(i.total, pool); pool -= i.paid; i.rest = i.total - i.paid;
+    const over = i.rest > 0 && i.due && i.due < today();
+    i.st = i.rest === 0 ? ["Payée", "ok"] : over ? ["En retard", "late"] : i.paid > 0 ? ["Partielle", "wait"] : ["À payer", "wait"];
+    billed += i.total; due += i.rest; if (over) late += i.rest;
+  });
+  return { inv, billed, paid: paidAll, due, late, credit: pool };
+}
+function all(kind) { const t = { b: 0, p: 0, d: 0, l: 0 }; S.clients.filter(c => (c.kind || "client") === kind).forEach(c => { const x = calc(c.id); t.b += x.billed; t.p += x.paid; t.d += x.due; t.l += x.late; }); return t; }
+function nextNo(kind) { const p = kind === "fournisseur" ? "A" : "F", y = new Date().getFullYear(), n = S.invoices.filter(i => i.no.indexOf(p + y) === 0).length + 1; return p + y + "-" + String(n).padStart(3, "0"); }
+function curKind() { const c = S.clients.find(c => c.id === cid); return c && c.kind === "fournisseur" ? "fournisseur" : "client"; }
+
+/* ---------- Base de données ---------- */
+function row(col, o) {
+  if (col === "clients") return { id: o.id, name: o.name, phone: o.phone || "", note: o.note || "", kind: o.kind || "client", share_token: o.share || null };
+  if (col === "invoices") return { id: o.id, client_id: o.cid, no: o.no, date: o.date, due: o.due || null, items: o.items };
+  return { id: o.id, client_id: o.cid, date: o.date, amt: o.amt, method: o.method, note: o.note || "" };
+}
+function resetSyn() { ["clients", "invoices", "payments"].forEach(c => { syn[c] = {}; S[c].forEach(o => { syn[c][o.id] = JSON.stringify(row(c, o)); }); }); }
+
+let queue = Promise.resolve();
+function save() { queue = queue.then(doSave).catch(e => { alert("Erreur d'enregistrement : " + (e.message || e)); return loadAll(false); }); return queue; }
+async function doSave() {
+  if (!active()) { alert("Abonnement expiré : lecture seule. Contactez le prestataire."); return loadAll(false); }
+  for (const col of ["clients", "invoices", "payments"]) {
+    const up = [];
+    S[col].forEach(o => { const r = row(col, o); if (syn[col][o.id] !== JSON.stringify(r)) up.push(r); });
+    if (up.length) { const { error } = await sb.from(col).upsert(up); if (error) throw error; up.forEach(r => { syn[col][r.id] = JSON.stringify(r); }); }
+  }
+  for (const col of ["payments", "invoices", "clients"]) {
+    const del = Object.keys(syn[col]).filter(id => !S[col].some(o => o.id === id));
+    if (del.length) { const { error } = await sb.from(col).delete().in("id", del); if (error) throw error; del.forEach(id => { delete syn[col][id]; }); }
+  }
+  const c = JSON.stringify({ shop: S.shop, cur: S.cur });
+  if (c !== cfgS) { const { error } = await sb.from("profiles").upsert({ user_id: user.id, shop: S.shop, cur: S.cur }); if (error) throw error; cfgS = c; }
+}
+
+async function loadAll(first) {
+  if (first) app('<p class="mut">Chargement…</p>');
+  const r = await Promise.all([
+    sb.from("clients").select("*"), sb.from("invoices").select("*"), sb.from("payments").select("*"),
+    sb.from("profiles").select("*").eq("user_id", user.id).maybeSingle(),
+    sb.from("subscriptions").select("*").eq("user_id", user.id).maybeSingle(),
+    sb.from("admins").select("user_id").eq("user_id", user.id).maybeSingle()
+  ]);
+  const err = r.find(x => x.error);
+  if (err) { app(`<div class="empty">Erreur de chargement : ${esc(err.error.message)}</div><div class="acts"><button id="rt">Réessayer</button><button id="lo">Se déconnecter</button></div>`); $("#rt").onclick = () => loadAll(true); $("#lo").onclick = () => sb.auth.signOut(); return; }
+  S.clients = r[0].data.map(x => ({ id: x.id, name: x.name, phone: x.phone, note: x.note, kind: x.kind || "client", share: x.share_token || null }));
+  S.invoices = r[1].data.map(x => ({ id: x.id, cid: x.client_id, no: x.no, date: x.date, due: x.due || "", items: x.items }));
+  S.payments = r[2].data.map(x => ({ id: x.id, cid: x.client_id, date: x.date, amt: Number(x.amt), method: x.method, note: x.note || "" }));
+  const p = r[3].data; S.shop = p ? p.shop : ""; S.cur = p ? p.cur : "GNF"; cfgS = JSON.stringify({ shop: S.shop, cur: S.cur });
+  sub = r[4].data; isAdm = !!r[5].data;
+  resetSyn(); render();
+}
+
+/* ---------- Connexion ---------- */
+function renderAuth(mode) {
+  mode = mode || "in";
+  app(`<div class="top"><h1>Carnet Clair</h1></div>
+  <div class="hero"><small>Suivez vos clients, vos factures et vos paiements</small><div class="big" style="font-size:24px">${mode === "in" ? "Connexion" : "Créer mon compte"}</div></div>
+  <label for="ae">E-mail</label><input id="ae" type="email" autocomplete="email" inputmode="email">
+  <label for="ap">Mot de passe (6 caractères minimum)</label><input id="ap" type="password" autocomplete="${mode === "in" ? "current-password" : "new-password"}">
+  ${mode === "up" ? '<label class="chk" style="margin-top:12px"><input type="checkbox" id="at"><span>J\'accepte les conditions d\'utilisation et la politique de confidentialité.</span></label>' : ""}
+  <p class="mut" id="am"></p>
+  <div class="acts"><button class="p" id="ago">${mode === "in" ? "Se connecter" : "Créer mon compte"}</button><button id="asw">${mode === "in" ? "Créer un compte" : "J'ai déjà un compte"}</button></div>`);
+  $("#asw").onclick = () => renderAuth(mode === "in" ? "up" : "in");
+  $("#ago").onclick = async () => {
+    const email = $("#ae").value.trim(), password = $("#ap").value, m = $("#am");
+    if (!email || password.length < 6) { m.textContent = "Entrez un e-mail et un mot de passe de 6 caractères au moins."; return; }
+    if (mode === "up" && !$("#at").checked) { m.textContent = "Vous devez accepter les conditions pour continuer."; return; }
+    $("#ago").disabled = true; m.textContent = "Un instant…";
+    const res = mode === "in" ? await sb.auth.signInWithPassword({ email, password }) : await sb.auth.signUp({ email, password });
+    $("#ago").disabled = false;
+    if (res.error) { m.textContent = "Échec : " + res.error.message; return; }
+    if (mode === "up" && !res.data.session) m.textContent = "Compte créé. Vérifiez votre boîte e-mail pour confirmer, puis connectez-vous.";
+  };
+}
+
+/* ---------- Écrans ---------- */
+function render() {
+  if (!user) return renderAuth();
+  const si = subInfo(); let h = "";
+  const banner = si.text ? `<p style="margin:-6px 0 12px"><span class="tag ${si.cls}">${esc(si.text)}</span></p>` : "";
+  if (!cid) {
+    const sup = tab === "fournisseur", t = all(tab), list = S.clients.filter(c => (c.kind || "client") === tab);
+    h += `<div class="top"><h1>Carnet Clair</h1><button id="bk">Réglages</button></div>${banner}`;
+    h += `<div class="acts" style="margin:0 0 12px"><button id="tc" class="${sup ? "" : "p"}">Clients</button><button id="tf" class="${sup ? "p" : ""}">Fournisseurs</button></div>`;
+    h += `<div class="hero"><small>${sup ? "Reste à payer à mes fournisseurs" : "Reste à encaisser"}</small><div class="big">${fmt(t.d)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${fmt(t.b)}</b></div><div>${sup ? "Payé" : "Encaissé"}<b>${fmt(t.p)}</b></div><div>En retard<b>${fmt(t.l)}</b></div></div></div>`;
+    h += `<div class="bar"><button class="p" id="nc">${sup ? "Nouveau fournisseur" : "Nouveau client"}</button></div>`;
+    if (!list.length) h += `<div class="empty">${sup ? "Aucun fournisseur. Ajoutez un fournisseur, puis notez vos achats et vos paiements." : "Aucun client. Ajoutez votre premier client, puis créez sa première facture."}</div>`;
+    else {
+      h += `<div class="list">`;
+      list.slice().sort((a, b) => calc(b.id).due - calc(a.id).due).forEach(c => {
+        const x = calc(c.id);
+        h += `<button class="item" data-c="${c.id}"><span><b>${esc(c.name)}</b><br><span class="mut">${x.inv.length} ${sup ? "achat(s)" : "facture(s)"}${x.late ? ' · <span class="tag late">En retard</span>' : ""}</span></span><span class="amt">${x.due ? fmt(x.due) : '<span class="tag ok">À jour</span>'}</span></button>`;
+      });
+      h += `</div>`;
+    }
+  } else {
+    const c = S.clients.find(c => c.id === cid); if (!c) { cid = null; return render(); }
+    const x = calc(cid), sup = c.kind === "fournisseur";
+    h += `<div class="top"><button id="back">Retour</button><button id="ec">Modifier</button></div>${banner}`;
+    h += `<h1>${esc(c.name)}</h1><div class="mut">${esc(c.phone || "Pas de téléphone")}${c.note ? " · " + esc(c.note) : ""}</div>`;
+    h += `<div class="hero" style="margin-top:12px"><small>${sup ? "Reste à payer au fournisseur" : "Reste à payer"}</small><div class="big">${fmt(x.due)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${fmt(x.billed)}</b></div><div>Payé<b>${fmt(x.paid)}</b></div><div>${x.credit ? "Avance" : "En retard"}<b>${fmt(x.credit || x.late)}</b></div></div></div>`;
+    h += `<div class="acts" style="margin-top:0"><button class="p" id="ni">${sup ? "Nouvel achat" : "Nouvelle facture"}</button><button id="np">${sup ? "Enregistrer un paiement" : "Encaisser un paiement"}</button>${x.due && !sup ? '<button id="rl">Relancer</button>' : ""}<button id="sh">Partager le relevé</button></div>`;
+    h += `<div class="sec"><h2>${sup ? "Achats" : "Factures"}</h2></div>`;
+    if (!x.inv.length) h += `<div class="empty">${sup ? "Aucun achat noté." : "Aucune facture pour ce client."}</div>`;
+    else {
+      h += `<div class="list">`;
+      x.inv.slice().reverse().forEach(i => {
+        h += `<button class="item" data-i="${i.id}"><span><b>${esc(i.no)}</b> <span class="tag ${i.st[1]}">${i.st[0]}</span><br><span class="mut">${fd(i.date)}${i.due ? " · échéance " + fd(i.due) : ""}</span></span><span class="amt">${fmt(i.total)}${i.rest && i.paid ? `<br><span class="mut">reste ${fmt(i.rest)}</span>` : ""}</span></button>`;
+      });
+      h += `</div>`;
+    }
+    h += `<div class="sec"><h2>${sup ? "Paiements effectués" : "Paiements reçus"}</h2></div>`;
+    const ps = S.payments.filter(p => p.cid === cid).sort((a, b) => a.date < b.date ? 1 : -1);
+    if (!ps.length) h += `<div class="empty">Aucun paiement enregistré.</div>`;
+    else {
+      h += `<div class="list">`;
+      ps.forEach(p => { h += `<button class="item" data-p="${p.id}"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}${p.note ? " · " + esc(p.note) : ""}</span></span><span class="amt">${fmt(p.amt)}</span></button>`; });
+      h += `</div>`;
+    }
+    h += `<p class="mut">Les paiements sont rattachés automatiquement aux factures les plus anciennes.</p>`;
+  }
+  app(h); bind();
+}
+function on(s, f) { const e = $(s); if (e) e.onclick = f; }
+function bind() {
+  on("#nc", () => clientForm(null, tab)); on("#tc", () => { tab = "client"; render(); }); on("#tf", () => { tab = "fournisseur"; render(); }); on("#ec", () => clientForm(cid)); on("#back", () => { cid = null; render(); });
+  on("#ni", () => invForm()); on("#np", () => payForm()); on("#rl", relance); on("#sh", shareStatement); on("#bk", settings);
+  document.querySelectorAll("[data-c]").forEach(b => { b.onclick = () => { cid = b.dataset.c; render(); window.scrollTo(0, 0); }; });
+  document.querySelectorAll("[data-i]").forEach(b => { b.onclick = () => invView(b.dataset.i); });
+  document.querySelectorAll("[data-p]").forEach(b => { b.onclick = () => payForm(b.dataset.p); });
+}
+function dlgOpen(h) { const d = $("#dlg"); d.innerHTML = h; if (!d.open) d.showModal(); return d; }
+function dlgClose() { $("#dlg").close(); }
+
+function clientForm(id, kind) {
+  const c = id ? S.clients.find(c => c.id === id) : { name: "", phone: "", note: "" };
+  const sup = (id ? c.kind : kind) === "fournisseur";
+  dlgOpen(`<h2>${id ? (sup ? "Modifier le fournisseur" : "Modifier le client") : (sup ? "Nouveau fournisseur" : "Nouveau client")}</h2>
+  <label for="f1">Nom</label><input id="f1" value="${esc(c.name)}">
+  <label for="f2">Téléphone (avec indicatif, ex. 224...)</label><input id="f2" inputmode="tel" value="${esc(c.phone)}">
+  <label for="f3">Note</label><input id="f3" value="${esc(c.note)}">
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button>${id ? '<button class="d" id="del">Supprimer</button>' : ""}</div>`);
+  $("#no").onclick = dlgClose;
+  $("#ok").onclick = () => {
+    const n = $("#f1").value.trim(); if (!n) { $("#f1").focus(); return; }
+    if (id) { c.name = n; c.phone = $("#f2").value.trim(); c.note = $("#f3").value.trim(); }
+    else { const nc = { id: uuid(), name: n, phone: $("#f2").value.trim(), note: $("#f3").value.trim(), kind: kind || "client" }; S.clients.push(nc); cid = nc.id; }
+    dlgClose(); render(); save();
+  };
+  if (id) $("#del").onclick = () => {
+    if (confirm("Supprimer cette fiche avec ses factures et paiements ?")) {
+      S.clients = S.clients.filter(c => c.id !== id); S.invoices = S.invoices.filter(i => i.cid !== id); S.payments = S.payments.filter(p => p.cid !== id);
+      cid = null; dlgClose(); render(); save();
+    }
+  };
+}
+const lineRow = l => `<div class="ln"><input placeholder="Article" aria-label="Article" value="${esc(l.d)}"><input type="number" inputmode="decimal" min="0" placeholder="Qté" aria-label="Quantité" value="${l.q || ""}"><input type="number" inputmode="decimal" min="0" placeholder="Prix unitaire" aria-label="Prix unitaire" value="${l.p || ""}"></div>`;
+function invForm() {
+  const d30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+  dlgOpen(`<h2>${curKind() === "fournisseur" ? "Nouvel achat" : "Nouvelle facture"} ${nextNo(curKind())}</h2>
+  <div class="two"><div><label for="g1">Date</label><input type="date" id="g1" value="${today()}"></div><div><label for="g2">Échéance</label><input type="date" id="g2" value="${d30}"></div></div>
+  <label>Articles</label><div id="ls">${lineRow({ d: "", q: 1, p: "" })}</div><button id="al">Ajouter une ligne</button>
+  <p class="amt" id="tt">Total : ${fmt(0)}</p>
+  <div class="acts"><button class="p" id="ok">${curKind() === "fournisseur" ? "Enregistrer l'achat" : "Créer la facture"}</button><button id="no">Annuler</button></div>`);
+  const sum = () => { let t = 0; document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"); t += (+i[1].value || 0) * (+i[2].value || 0); }); $("#tt").textContent = "Total : " + fmt(t); };
+  $("#ls").oninput = sum; $("#al").onclick = () => $("#ls").insertAdjacentHTML("beforeend", lineRow({ d: "", q: 1, p: "" })); $("#no").onclick = dlgClose;
+  $("#ok").onclick = () => {
+    const items = [];
+    document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"), q = +i[1].value || 0, p = +i[2].value || 0; if (i[0].value.trim() && q > 0 && p > 0) items.push({ d: i[0].value.trim(), q, p }); });
+    if (!items.length) { alert("Ajoutez au moins un article avec quantité et prix."); return; }
+    S.invoices.push({ id: uuid(), cid, no: nextNo(curKind()), date: $("#g1").value || today(), due: $("#g2").value, items });
+    dlgClose(); render(); save();
+  };
+}
+function invView(id) {
+  const i = calc(cid).inv.find(i => i.id === id), c = S.clients.find(c => c.id === cid);
+  const rows = i.items.map(l => `<tr><td>${esc(l.d)}</td><td>${l.q} × ${fmt(l.p)}</td><td>${fmt(l.q * l.p)}</td></tr>`).join("");
+  dlgOpen(`<div id="inv"><h2>${curKind() === "fournisseur" ? "Achat" : "Facture"} ${esc(i.no)}</h2><p class="mut">${esc(S.shop)}<br>${curKind() === "fournisseur" ? "Fournisseur" : "Client"} : ${esc(c.name)}<br>Date : ${fd(i.date)}${i.due ? " · Échéance : " + fd(i.due) : ""}</p>
+  <div class="wrap"><table><tr><th>Article</th><th>Détail</th><th>Montant</th></tr>${rows}</table></div>
+  <p class="amt">Total : ${fmt(i.total)}<br>Payé : ${fmt(i.paid)}<br>Reste : ${fmt(i.rest)} <span class="tag ${i.st[1]}">${i.st[0]}</span></p></div>
+  <div class="acts"><button class="p" id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
+  $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print();
+  $("#del").onclick = () => { if (confirm("Supprimer cette facture ?")) { S.invoices = S.invoices.filter(x => x.id !== id); dlgClose(); render(); save(); } };
+}
+function payForm(id) {
+  const p = id ? S.payments.find(p => p.id === id) : { amt: "", date: today(), method: "Espèces", note: "" };
+  const ms = ["Espèces", "Orange Money", "Mobile Money", "Virement", "Chèque"].map(m => `<option${m === p.method ? " selected" : ""}>${m}</option>`).join("");
+  dlgOpen(`<h2>${id ? "Modifier le paiement" : (curKind() === "fournisseur" ? "Enregistrer un paiement" : "Encaisser un paiement")}</h2>
+  <label for="h1">Montant (${esc(S.cur)})</label><input id="h1" type="number" inputmode="decimal" min="0" value="${p.amt}">
+  <div class="two"><div><label for="h2">Date</label><input type="date" id="h2" value="${p.date}"></div><div><label for="h3">Mode</label><select id="h3">${ms}</select></div></div>
+  <label for="h4">Note</label><input id="h4" value="${esc(p.note)}">
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button>${id ? '<button class="d" id="del">Supprimer</button>' : ""}</div>`);
+  $("#no").onclick = dlgClose;
+  $("#ok").onclick = () => {
+    const a = +$("#h1").value; if (!(a > 0)) { $("#h1").focus(); return; }
+    const o = { amt: a, date: $("#h2").value || today(), method: $("#h3").value, note: $("#h4").value.trim() };
+    if (id) Object.assign(p, o); else S.payments.push(Object.assign({ id: uuid(), cid }, o));
+    dlgClose(); render(); save();
+  };
+  if (id) $("#del").onclick = () => { if (confirm("Supprimer ce paiement ?")) { S.payments = S.payments.filter(x => x.id !== id); dlgClose(); render(); save(); } };
+}
+function relance() {
+  const c = S.clients.find(c => c.id === cid), x = calc(cid), n = x.inv.filter(i => i.rest > 0).length;
+  const msg = `Bonjour ${c.name}, petit rappel : il reste ${fmt(x.due)} à régler (${n} facture${n > 1 ? "s" : ""}). Merci de votre confiance.`;
+  const tel = (c.phone || "").replace(/\D/g, "");
+  dlgOpen(`<h2>Message de relance</h2><textarea id="m" rows="5">${esc(msg)}</textarea>
+  <div class="acts">${tel ? '<button class="p" id="wa">Envoyer par WhatsApp</button>' : ""}<button id="cp">Copier</button><button id="no">Fermer</button></div>
+  ${tel ? "" : '<p class="mut">Ajoutez un numéro au client pour envoyer directement.</p>'}`);
+  $("#no").onclick = dlgClose;
+  $("#cp").onclick = () => { try { navigator.clipboard.writeText($("#m").value); $("#cp").textContent = "Copié"; } catch (e) { $("#m").select(); } };
+  if (tel) $("#wa").onclick = () => { const a = document.createElement("a"); a.href = "https://wa.me/" + tel + "?text=" + encodeURIComponent($("#m").value); a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); };
+}
+
+/* ---------- Réglages, sauvegarde, administration ---------- */
+function exportJson() {
+  const b = new Blob([JSON.stringify({ clients: S.clients, invoices: S.invoices, payments: S.payments, cur: S.cur, shop: S.shop })], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "carnet-clients-" + today() + ".json"; document.body.appendChild(a); a.click(); a.remove();
+}
+function importData(o) {
+  const m = {};
+  (o.clients || []).forEach(c => { const id = uuid(); m[c.id] = id; S.clients.push({ id, name: c.name || "Sans nom", phone: c.phone || "", note: c.note || "", kind: c.kind || "client" }); });
+  (o.invoices || []).forEach(i => { if (m[i.cid]) S.invoices.push({ id: uuid(), cid: m[i.cid], no: i.no, date: i.date, due: i.due || "", items: i.items || [] }); });
+  (o.payments || []).forEach(p => { if (m[p.cid]) S.payments.push({ id: uuid(), cid: m[p.cid], date: p.date, amt: +p.amt || 0, method: p.method || "Espèces", note: p.note || "" }); });
+}
+function settings() {
+  const si = subInfo();
+  dlgOpen(`<h2>Réglages</h2>
+  <p class="mut">${esc(user.email)}${si.text ? "<br>" + esc(si.text) : ""}</p>
+  <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" value="${esc(S.shop)}">
+  <label for="s2">Devise</label><input id="s2" value="${esc(S.cur)}">
+  <p class="mut">Pensez à exporter une sauvegarde de temps en temps.</p>
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Exporter</button><button id="im">Importer</button>${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
+  <input type="file" id="fl" accept=".json" hidden>`);
+  $("#no").onclick = dlgClose;
+  $("#ok").onclick = () => { S.shop = $("#s1").value.trim(); S.cur = $("#s2").value.trim() || "GNF"; dlgClose(); render(); save(); };
+  $("#ex").onclick = exportJson;
+  $("#im").onclick = () => $("#fl").click();
+  $("#fl").onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { try { const o = JSON.parse(r.result); if (!o || !o.clients) throw 0; importData(o); dlgClose(); render(); save(); } catch (x) { alert("Fichier invalide."); } };
+    r.readAsText(f);
+  };
+  $("#lo").onclick = () => { dlgClose(); sb.auth.signOut(); };
+  if (isAdm) $("#ad").onclick = adminView;
+}
+async function adminView() {
+  const { data, error } = await sb.from("subscriptions").select("*").order("created_at", { ascending: false });
+  if (error) { alert(error.message); return; }
+  const rows = data.map(s => {
+    const t = Date.parse(s.trial_ends), p = s.paid_until ? Date.parse(s.paid_until) : 0, ok = Math.max(t, p) >= Date.now();
+    return `<div class="item" style="flex-direction:column;align-items:stretch"><b>${esc(s.email || s.user_id)}</b><span class="mut">Essai : ${fd(s.trial_ends.slice(0, 10))} · Payé : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"} <span class="tag ${ok ? "ok" : "late"}">${ok ? "Actif" : "Expiré"}</span></span><div class="acts" style="margin-top:8px"><button data-ex="${s.user_id}">+30 jours payés</button><button class="d" data-su="${s.user_id}">Suspendre</button></div></div>`;
+  }).join("");
+  dlgOpen(`<h2>Abonnés (${data.length})</h2><div class="list" style="margin-top:10px">${rows || '<div class="empty">Aucun abonné.</div>'}</div><div class="acts"><button id="no">Fermer</button></div>`);
+  $("#no").onclick = dlgClose;
+  document.querySelectorAll("[data-ex]").forEach(b => { b.onclick = async () => {
+    const s = data.find(x => x.user_id === b.dataset.ex), base = Math.max(Date.now(), s.paid_until ? Date.parse(s.paid_until) : 0);
+    const r = await sb.from("subscriptions").update({ paid_until: new Date(base + 30 * 864e5).toISOString() }).eq("user_id", s.user_id);
+    if (r.error) alert(r.error.message); adminView();
+  }; });
+  document.querySelectorAll("[data-su]").forEach(b => { b.onclick = async () => {
+    if (!confirm("Suspendre cet abonné ?")) return;
+    const r = await sb.from("subscriptions").update({ paid_until: null, trial_ends: new Date(Date.now() - 1000).toISOString() }).eq("user_id", b.dataset.su);
+    if (r.error) alert(r.error.message); adminView();
+  }; });
+}
+
+/* ---------- Relevé partagé avec le client ---------- */
+async function shareStatement() {
+  let c = S.clients.find(c => c.id === cid);
+  const tel = (c.phone || "").replace(/\D/g, "");
+  const show = () => {
+    const link = location.origin + location.pathname + "#/r/" + c.share;
+    const msg = c.kind === "fournisseur" ? `Bonjour ${c.name}, voici le relevé de notre compte${S.shop ? " (" + S.shop + ")" : ""} : achats, paiements, solde : ${link}` : `Bonjour ${c.name}, voici le relevé de votre compte${S.shop ? " chez " + S.shop : ""} (factures, paiements, solde) : ${link}`;
+    dlgOpen(`<h2>Relevé de ${esc(c.name)}</h2>
+    <p class="mut">Toute personne qui a ce lien voit le relevé de ce client, en lecture seule. Envoyez-le seulement à lui.</p>
+    <textarea id="m" rows="5">${esc(msg)}</textarea>
+    <div class="acts"><button class="p" id="wa">Envoyer par WhatsApp</button><button id="cp">Copier</button><button class="d" id="off">Désactiver le lien</button><button id="no">Fermer</button></div>`);
+    $("#no").onclick = dlgClose;
+    $("#cp").onclick = () => { try { navigator.clipboard.writeText($("#m").value); $("#cp").textContent = "Copié"; } catch (e) { $("#m").select(); } };
+    $("#wa").onclick = () => { const a = document.createElement("a"); a.href = "https://wa.me/" + tel + "?text=" + encodeURIComponent($("#m").value); a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); };
+    $("#off").onclick = async () => {
+      if (!confirm("Désactiver ce lien ? Le client ne pourra plus voir son relevé avec lui.")) return;
+      c.share = null; dlgClose(); await save(); render();
+    };
+  };
+  if (c.share) { show(); return; }
+  dlgOpen(`<h2>Relevé de ${esc(c.name)}</h2>
+  <p class="mut">Créez un lien privé que ${esc(c.name)} peut ouvrir sur son téléphone, sans compte, pour voir ${c.kind === "fournisseur" ? "les achats, les paiements et le solde de votre compte" : "ses factures, ses paiements et son solde"}. Il ne voit rien d'autre. Vous pourrez désactiver le lien à tout moment.</p>
+  <div class="acts"><button class="p" id="on">Créer le lien</button><button id="no">Annuler</button></div>`);
+  $("#no").onclick = dlgClose;
+  $("#on").onclick = async () => {
+    c.share = uuid(); $("#on").disabled = true; await save();
+    c = S.clients.find(x => x.id === cid);
+    if (c && c.share) show(); else dlgClose();
+  };
+}
+async function statementBoot(token) {
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  app('<p class="mut">Chargement…</p>');
+  const { data, error } = await sb.rpc("get_statement", { t: token });
+  if (error || !data) { app('<div class="top"><h1>Relevé de compte</h1></div><div class="empty">Ce lien n\'est plus valide. Demandez un nouveau lien à votre commerçant.</div>'); return; }
+  S = { clients: [{ id: "x" }], cur: data.cur, shop: data.shop,
+    invoices: data.invoices.map(i => ({ no: i.no, date: i.date, due: i.due || "", items: i.items, cid: "x" })),
+    payments: data.payments.map(p => ({ date: p.date, amt: Number(p.amt), method: p.method, cid: "x" })) };
+  const x = calc("x"), sup = data.kind === "fournisseur";
+  let h = `<div id="inv"><div class="top"><h1>Relevé de compte</h1><button id="pr">Imprimer</button></div>
+  <p class="mut">${esc(data.shop || "")}${data.shop ? "<br>" : ""}${sup ? "Fournisseur" : "Client"} : <b>${esc(data.name)}</b><br>Situation au ${fd(today())}</p>
+  <div class="hero"><small>${sup ? "Reste à payer par le commerçant" : "Reste à payer"}</small><div class="big">${fmt(x.due)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${fmt(x.billed)}</b></div><div>Payé<b>${fmt(x.paid)}</b></div><div>${x.credit ? "Avance" : "En retard"}<b>${fmt(x.credit || x.late)}</b></div></div></div>
+  <div class="sec"><h2>${sup ? "Achats" : "Factures"}</h2></div>`;
+  if (!x.inv.length) h += '<div class="empty">Aucune facture.</div>';
+  else { h += '<div class="list">'; x.inv.slice().reverse().forEach(i => { h += `<div class="item"><span><b>${esc(i.no)}</b> <span class="tag ${i.st[1]}">${i.st[0]}</span><br><span class="mut">${fd(i.date)}${i.due ? " · échéance " + fd(i.due) : ""}</span></span><span class="amt">${fmt(i.total)}${i.rest && i.paid ? `<br><span class="mut">reste ${fmt(i.rest)}</span>` : ""}</span></div>`; }); h += "</div>"; }
+  h += '<div class="sec"><h2>' + (sup ? "Paiements effectués" : "Paiements reçus") + '</h2></div>';
+  const ps = S.payments.slice().sort((a, b) => a.date < b.date ? 1 : -1);
+  if (!ps.length) h += '<div class="empty">Aucun paiement enregistré.</div>';
+  else { h += '<div class="list">'; ps.forEach(p => { h += `<div class="item"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}</span></span><span class="amt">${fmt(p.amt)}</span></div>`; }); h += "</div>"; }
+  h += '<p class="mut">Ce relevé est personnel. Les paiements sont rattachés aux factures les plus anciennes. En cas de désaccord, contactez directement votre commerçant.</p></div>';
+  app(h); $("#pr").onclick = () => window.print();
+}
+
+/* ---------- Démarrage ---------- */
+function boot() {
+  if (SUPABASE_URL.indexOf("VOTRE") > -1 || typeof supabase === "undefined") {
+    app('<div class="empty">Configuration manquante : ouvrez index.html et remplacez SUPABASE_URL et SUPABASE_KEY (voir GUIDE.md).</div>'); return;
+  }
+  const sm = location.hash.match(/^#\/r\/([0-9a-fA-F-]{36})$/);
+  if (sm) { statementBoot(sm[1]); return; }
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  sb.auth.onAuthStateChange((ev, s) => {
+    const u = s && s.user ? s.user : null, changed = (u ? u.id : null) !== (user ? user.id : null);
+    if (!changed && ev !== "INITIAL_SESSION") return;
+    user = u;
+    setTimeout(() => {
+      if (user) loadAll(true);
+      else { S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" }; sub = null; isAdm = false; cid = null; renderAuth(); }
+    }, 0);
+  });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && user && !$("#dlg").open) queue = queue.then(() => loadAll(false)); });
+}
+boot();
+</script>
+</body>
+</html>
