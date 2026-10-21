@@ -69,6 +69,7 @@ const SUPABASE_KEY = "sb_publishable_Jz2Kt1WlETaj8tSbzbom0w_yZ5SEB-J";
 /* ======================================================================= */
 
 let sb = null, user = null, sub = null, isAdm = false, cid = null, cfgS = "", tab = "client";
+let recovering = /type=recovery/.test(location.hash);
 let S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" };
 let syn = { clients: {}, invoices: {}, payments: {} };
 const $ = s => document.querySelector(s);
@@ -159,8 +160,9 @@ function renderAuth(mode) {
   <label for="ap">Mot de passe (6 caractères minimum)</label><input id="ap" type="password" autocomplete="${mode === "in" ? "current-password" : "new-password"}">
   ${mode === "up" ? '<label class="chk" style="margin-top:12px"><input type="checkbox" id="at"><span>J\'accepte les conditions d\'utilisation et la politique de confidentialité.</span></label>' : ""}
   <p class="mut" id="am"></p>
-  <div class="acts"><button class="p" id="ago">${mode === "in" ? "Se connecter" : "Créer mon compte"}</button><button id="asw">${mode === "in" ? "Créer un compte" : "J'ai déjà un compte"}</button></div>`);
+  <div class="acts"><button class="p" id="ago">${mode === "in" ? "Se connecter" : "Créer mon compte"}</button><button id="asw">${mode === "in" ? "Créer un compte" : "J'ai déjà un compte"}</button></div>${mode === "in" ? '<p style="margin-top:12px"><button id="afg" style="border:none;background:none;text-decoration:underline;min-height:0;padding:6px 0">Mot de passe oublié ?</button></p>' : ""}`);
   $("#asw").onclick = () => renderAuth(mode === "in" ? "up" : "in");
+  if ($("#afg")) $("#afg").onclick = () => renderReset();
   $("#ago").onclick = async () => {
     const email = $("#ae").value.trim(), password = $("#ap").value, m = $("#am");
     if (!email || password.length < 6) { m.textContent = "Entrez un e-mail et un mot de passe de 6 caractères au moins."; return; }
@@ -329,7 +331,7 @@ function settings() {
   <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" value="${esc(S.shop)}">
   <label for="s2">Devise</label><input id="s2" value="${esc(S.cur)}">
   <p class="mut">Pensez à exporter une sauvegarde de temps en temps.</p>
-  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Exporter</button><button id="im">Importer</button>${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Exporter</button><button id="im">Importer</button>${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
   <input type="file" id="fl" accept=".json" hidden>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = () => { S.shop = $("#s1").value.trim(); S.cur = $("#s2").value.trim() || "GNF"; dlgClose(); render(); save(); };
@@ -342,6 +344,7 @@ function settings() {
     r.readAsText(f);
   };
   $("#lo").onclick = () => { dlgClose(); sb.auth.signOut(); };
+  $("#pw").onclick = changePassword;
   if (isAdm) $("#ad").onclick = adminView;
 }
 async function adminView() {
@@ -418,6 +421,60 @@ async function statementBoot(token) {
   app(h); $("#pr").onclick = () => window.print();
 }
 
+/* ---------- Mot de passe oublié / changement ---------- */
+function renderReset() {
+  app(`<div class="top"><h1>Carnet Clair</h1></div>
+  <div class="hero"><small>Mot de passe oublié</small><div class="big" style="font-size:22px">Recevez un lien par e-mail</div></div>
+  <label for="re">Votre adresse e-mail</label><input id="re" type="email" autocomplete="email" inputmode="email">
+  <p class="mut" id="rm"></p>
+  <div class="acts"><button class="p" id="rgo">Envoyer le lien</button><button id="rbk">Retour</button></div>`);
+  $("#rbk").onclick = () => renderAuth("in");
+  $("#rgo").onclick = async () => {
+    const email = $("#re").value.trim(), m = $("#rm");
+    if (!email) { m.textContent = "Entrez votre adresse e-mail."; return; }
+    $("#rgo").disabled = true; m.textContent = "Un instant…";
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+    $("#rgo").disabled = false;
+    m.textContent = error ? "Échec : " + error.message : "Si un compte existe avec cette adresse, un e-mail avec un lien vient d'être envoyé. Regardez aussi dans les spams.";
+  };
+}
+function renderNewPassword() {
+  app(`<div class="top"><h1>Carnet Clair</h1></div>
+  <div class="hero"><small>Nouveau mot de passe</small><div class="big" style="font-size:22px">Choisissez-en un nouveau</div></div>
+  <label for="n1">Nouveau mot de passe (6 caractères minimum)</label><input id="n1" type="password" autocomplete="new-password">
+  <label for="n2">Répétez-le</label><input id="n2" type="password" autocomplete="new-password">
+  <p class="mut" id="nm"></p>
+  <div class="acts"><button class="p" id="ngo">Enregistrer</button></div>`);
+  $("#ngo").onclick = async () => {
+    const p1 = $("#n1").value, p2 = $("#n2").value, m = $("#nm");
+    if (p1.length < 6) { m.textContent = "6 caractères au minimum."; return; }
+    if (p1 !== p2) { m.textContent = "Les deux mots de passe ne sont pas identiques."; return; }
+    $("#ngo").disabled = true; m.textContent = "Un instant…";
+    const { error } = await sb.auth.updateUser({ password: p1 });
+    if (error) { $("#ngo").disabled = false; m.textContent = "Échec : " + error.message; return; }
+    recovering = false;
+    try { history.replaceState(null, "", location.pathname); } catch (e) {}
+    loadAll(true);
+  };
+}
+function changePassword() {
+  dlgOpen(`<h2>Changer le mot de passe</h2>
+  <label for="c1">Nouveau mot de passe (6 caractères minimum)</label><input id="c1" type="password" autocomplete="new-password">
+  <label for="c2">Répétez-le</label><input id="c2" type="password" autocomplete="new-password">
+  <p class="mut" id="cm"></p>
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button></div>`);
+  $("#no").onclick = dlgClose;
+  $("#ok").onclick = async () => {
+    const p1 = $("#c1").value, p2 = $("#c2").value, m = $("#cm");
+    if (p1.length < 6) { m.textContent = "6 caractères au minimum."; return; }
+    if (p1 !== p2) { m.textContent = "Les deux mots de passe ne sont pas identiques."; return; }
+    m.textContent = "Un instant…";
+    const { error } = await sb.auth.updateUser({ password: p1 });
+    if (error) { m.textContent = "Échec : " + error.message; return; }
+    dlgClose(); alert("Mot de passe changé.");
+  };
+}
+
 /* ---------- Démarrage ---------- */
 function boot() {
   if (SUPABASE_URL.indexOf("VOTRE") > -1 || typeof supabase === "undefined") {
@@ -428,6 +485,8 @@ function boot() {
   sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   sb.auth.onAuthStateChange((ev, s) => {
     const u = s && s.user ? s.user : null, changed = (u ? u.id : null) !== (user ? user.id : null);
+    if (ev === "PASSWORD_RECOVERY") recovering = true;
+    if (recovering && u) { user = u; setTimeout(renderNewPassword, 0); return; }
     if (!changed && ev !== "INITIAL_SESSION") return;
     user = u;
     setTimeout(() => {
