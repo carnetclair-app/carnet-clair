@@ -61,6 +61,7 @@ td:last-child,th:last-child{text-align:right}
 <main id="app"><p class="mut">Chargement…</p></main>
 <dialog id="dlg"></dialog>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script>
 "use strict";
 /* ====== CONFIGURATION : remplacez ces deux lignes (voir GUIDE.md) ====== */
@@ -280,8 +281,11 @@ function invView(id) {
   dlgOpen(`<div id="inv"><h2>${curKind() === "fournisseur" ? "Achat" : "Facture"} ${esc(i.no)}</h2><p class="mut">${esc(S.shop)}<br>${curKind() === "fournisseur" ? "Fournisseur" : "Client"} : ${esc(c.name)}<br>Date : ${fd(i.date)}${i.due ? " · Échéance : " + fd(i.due) : ""}</p>
   <div class="wrap"><table><tr><th>Article</th><th>Détail</th><th>Montant</th></tr>${rows}</table></div>
   <p class="amt">Total : ${fmt(i.total)}<br>Payé : ${fmt(i.paid)}<br>Reste : ${fmt(i.rest)} <span class="tag ${i.st[1]}">${i.st[0]}</span></p></div>
-  <div class="acts"><button class="p" id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
+  <div class="acts"><button class="p" id="dl">Télécharger la facture PDF</button><button id="iw">📲 Envoyer la facture PDF sur WhatsApp</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print();
+  const tel = (c.phone || "").replace(/\D/g, ""), fname = "facture-" + i.no + ".pdf";
+  $("#dl").onclick = () => { const d = invoicePdf(i, c); if (d) saveFile(pdfFile(d, fname)); };
+  $("#iw").onclick = () => { const d = invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
   $("#del").onclick = () => { if (confirm("Supprimer cette facture ?")) { S.invoices = S.invoices.filter(x => x.id !== id); dlgClose(); render(); save(); } };
 }
 function payForm(id) {
@@ -291,14 +295,16 @@ function payForm(id) {
   <label for="h1">Montant (${esc(S.cur)})</label><input id="h1" type="number" inputmode="decimal" min="0" value="${p.amt}">
   <div class="two"><div><label for="h2">Date</label><input type="date" id="h2" value="${p.date}"></div><div><label for="h3">Mode</label><select id="h3">${ms}</select></div></div>
   <label for="h4">Note</label><input id="h4" value="${esc(p.note)}">
-  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button>${id ? '<button class="d" id="del">Supprimer</button>' : ""}</div>`);
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button>${id ? '<button id="rc">Reçu PDF</button><button class="d" id="del">Supprimer</button>' : ""}</div>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = () => {
     const a = +$("#h1").value; if (!(a > 0)) { $("#h1").focus(); return; }
     const o = { amt: a, date: $("#h2").value || today(), method: $("#h3").value, note: $("#h4").value.trim() };
-    if (id) Object.assign(p, o); else S.payments.push(Object.assign({ id: uuid(), cid }, o));
-    dlgClose(); render(); save();
+    let pid = id;
+    if (id) Object.assign(p, o); else { pid = uuid(); S.payments.push(Object.assign({ id: pid, cid }, o)); }
+    dlgClose(); render(); save().then(function () { if (!id) showReceipt(pid); });
   };
+  if (id) $("#rc").onclick = () => showReceipt(id);
   if (id) $("#del").onclick = () => { if (confirm("Supprimer ce paiement ?")) { S.payments = S.payments.filter(x => x.id !== id); dlgClose(); render(); save(); } };
 }
 function relance() {
@@ -419,6 +425,85 @@ async function statementBoot(token) {
   else { h += '<div class="list">'; ps.forEach(p => { h += `<div class="item"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}</span></span><span class="amt">${fmt(p.amt)}</span></div>`; }); h += "</div>"; }
   h += '<p class="mut">Ce relevé est personnel. Les paiements sont rattachés aux factures les plus anciennes. En cas de désaccord, contactez directement votre commerçant.</p></div>';
   app(h); $("#pr").onclick = () => window.print();
+}
+
+/* ---------- PDF : facture et reçu ---------- */
+function newDoc() {
+  const J = window.jspdf && window.jspdf.jsPDF;
+  if (!J) { alert("Le module PDF n'a pas pu se charger. Vérifiez votre connexion, rechargez la page et réessayez."); return null; }
+  return new J({ unit: "mm", format: "a5" });
+}
+function pdfHead(doc, title) {
+  doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.text(S.shop || "Carnet Clair", 12, 16);
+  doc.setFontSize(11); doc.text(title, 136, 16, { align: "right" });
+}
+function pdfFoot(doc) { doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text("Document généré avec Carnet Clair", 74, 202, { align: "center" }); }
+function invoicePdf(i, c) {
+  const doc = newDoc(); if (!doc) return null;
+  const sup = c.kind === "fournisseur";
+  pdfHead(doc, (sup ? "ACHAT " : "FACTURE ") + i.no);
+  let y = 24; doc.setFont("helvetica", "normal"); doc.setFontSize(9);
+  doc.text("Date : " + fd(i.date), 12, y);
+  if (i.due) doc.text("Échéance : " + fd(i.due), 136, y, { align: "right" });
+  y += 6; doc.text((sup ? "Fournisseur : " : "Client : ") + c.name + (c.phone ? "  (" + c.phone + ")" : ""), 12, y);
+  y += 4; doc.line(12, y, 136, y); y += 6;
+  doc.setFont("helvetica", "bold");
+  doc.text("Article", 12, y); doc.text("Qté", 70, y, { align: "right" }); doc.text("Prix unitaire", 104, y, { align: "right" }); doc.text("Montant", 136, y, { align: "right" });
+  y += 2; doc.line(12, y, 136, y); y += 5; doc.setFont("helvetica", "normal");
+  i.items.forEach(function (l) {
+    const lines = doc.splitTextToSize(String(l.d), 52);
+    if (y + lines.length * 4 > 180) { doc.addPage(); y = 16; }
+    doc.text(lines, 12, y); doc.text(String(l.q), 70, y, { align: "right" }); doc.text(fmt(l.p), 104, y, { align: "right" }); doc.text(fmt(l.q * l.p), 136, y, { align: "right" });
+    y += lines.length * 4 + 2;
+  });
+  if (y > 170) { doc.addPage(); y = 16; }
+  doc.line(12, y, 136, y); y += 6; doc.setFontSize(10);
+  doc.setFont("helvetica", "bold"); doc.text("Total", 100, y, { align: "right" }); doc.text(fmt(i.total), 136, y, { align: "right" });
+  y += 6; doc.setFont("helvetica", "normal"); doc.text("Payé", 100, y, { align: "right" }); doc.text(fmt(i.paid), 136, y, { align: "right" });
+  y += 6; doc.setFont("helvetica", "bold"); doc.text("Reste à payer", 100, y, { align: "right" }); doc.text(fmt(i.rest), 136, y, { align: "right" });
+  y += 8; doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.text("Statut : " + i.st[0], 12, y);
+  pdfFoot(doc); return doc;
+}
+function receiptPdf(p, c) {
+  const doc = newDoc(); if (!doc) return null;
+  const sup = c.kind === "fournisseur", x = calc(c.id);
+  pdfHead(doc, sup ? "PAIEMENT EFFECTUÉ" : "REÇU DE PAIEMENT");
+  let y = 26; doc.setFont("helvetica", "normal"); doc.setFontSize(9);
+  doc.text("Reçu n° " + p.id.slice(0, 8).toUpperCase(), 12, y); doc.text("Date : " + fd(p.date), 136, y, { align: "right" });
+  y += 8; doc.text((sup ? "Payé à : " : "Reçu de : ") + c.name + (c.phone ? "  (" + c.phone + ")" : ""), 12, y);
+  y += 12; doc.setFontSize(10); doc.text(sup ? "Montant payé" : "Montant reçu", 12, y);
+  y += 10; doc.setFont("helvetica", "bold"); doc.setFontSize(20); doc.text(fmt(p.amt), 12, y);
+  y += 10; doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.text("Mode de paiement : " + p.method, 12, y);
+  if (p.note) { y += 6; doc.text(doc.splitTextToSize("Note : " + p.note, 124), 12, y); }
+  y += 10; doc.line(12, y, 136, y); y += 7; doc.setFont("helvetica", "bold"); doc.setFontSize(10);
+  doc.text((sup ? "Reste à payer au fournisseur : " : "Reste à payer sur le compte : ") + fmt(x.due), 12, y);
+  if (x.credit > 0) { y += 6; doc.setFont("helvetica", "normal"); doc.text("Avance : " + fmt(x.credit), 12, y); }
+  pdfFoot(doc); return doc;
+}
+function pdfFile(doc, name) { return new File([doc.output("blob")], name, { type: "application/pdf" }); }
+function saveFile(file) {
+  const a = document.createElement("a"), u = URL.createObjectURL(file);
+  a.href = u; a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function () { URL.revokeObjectURL(u); }, 5000);
+}
+async function sharePdf(file, text, tel) {
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text: text }); return; } }
+  catch (e) { if (e && e.name === "AbortError") return; }
+  saveFile(file);
+  dlgOpen(`<h2>PDF enregistré</h2><p class="mut">Le fichier ${esc(file.name)} est dans Téléchargements. Ouvrez WhatsApp, appuyez sur le trombone, puis Document, et choisissez-le.</p>
+  <div class="acts"><button class="p" id="wo">Ouvrir WhatsApp</button><button id="no">Fermer</button></div>`);
+  $("#no").onclick = dlgClose;
+  $("#wo").onclick = () => { const a = document.createElement("a"); a.href = "https://wa.me/" + (tel || "") + "?text=" + encodeURIComponent(text); a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); };
+}
+function showReceipt(pid) {
+  const p = S.payments.find(x => x.id === pid); if (!p) return;
+  const c = S.clients.find(x => x.id === p.cid); if (!c) return;
+  const x = calc(c.id), tel = (c.phone || "").replace(/\D/g, ""), fname = "recu-" + p.date + "-" + p.id.slice(0, 6) + ".pdf";
+  dlgOpen(`<h2>Paiement enregistré</h2><p class="mut">${esc(c.name)} · ${fmt(p.amt)} · ${fd(p.date)}<br>Reste à payer : ${fmt(x.due)}</p>
+  <div class="acts"><button class="p" id="rw">📲 Envoyer le reçu PDF sur WhatsApp</button><button id="rd">Télécharger le reçu PDF</button><button id="no">Fermer</button></div>`);
+  $("#no").onclick = dlgClose;
+  $("#rd").onclick = () => { const d = receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
+  $("#rw").onclick = () => { const d = receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
 }
 
 /* ---------- Mot de passe oublié / changement ---------- */
