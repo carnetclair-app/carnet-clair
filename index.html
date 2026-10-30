@@ -107,7 +107,7 @@ function calc(id) {
   return { inv, billed, paid: paidAll, due, late, credit: pool };
 }
 function all(kind) { const t = { b: 0, p: 0, d: 0, l: 0 }; S.clients.filter(c => (c.kind || "client") === kind).forEach(c => { const x = calc(c.id); t.b += x.billed; t.p += x.paid; t.d += x.due; t.l += x.late; }); return t; }
-function nextNo(kind) { const p = kind === "fournisseur" ? "A" : "F", y = new Date().getFullYear(), n = S.invoices.filter(i => i.no.indexOf(p + y) === 0).length + 1; return p + y + "-" + String(n).padStart(3, "0"); }
+function nextNo(kind) { const p = (kind === "fournisseur" ? "A" : "F") + new Date().getFullYear() + "-"; let max = 0; S.invoices.forEach(i => { if (String(i.no).indexOf(p) === 0) { const n = parseInt(String(i.no).slice(p.length), 10); if (n > max) max = n; } }); return p + String(max + 1).padStart(3, "0"); }
 function curKind() { const c = S.clients.find(c => c.id === cid); return c && c.kind === "fournisseur" ? "fournisseur" : "client"; }
 
 /* ---------- Base de données ---------- */
@@ -259,20 +259,26 @@ function clientForm(id, kind) {
   };
 }
 const lineRow = l => `<div class="ln"><input placeholder="Article" aria-label="Article" value="${esc(l.d)}"><input type="number" inputmode="decimal" min="0" placeholder="Qté" aria-label="Quantité" value="${l.q || ""}"><input type="number" inputmode="decimal" min="0" placeholder="Prix unitaire" aria-label="Prix unitaire" value="${l.p || ""}"></div>`;
-function invForm() {
+function invForm(id) {
+  const ex = id ? S.invoices.find(x => x.id === id) : null, sup = curKind() === "fournisseur";
   const d30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
-  dlgOpen(`<h2>${curKind() === "fournisseur" ? "Nouvel achat" : "Nouvelle facture"} ${nextNo(curKind())}</h2>
-  <div class="two"><div><label for="g1">Date</label><input type="date" id="g1" value="${today()}"></div><div><label for="g2">Échéance</label><input type="date" id="g2" value="${d30}"></div></div>
-  <label>Articles</label><div id="ls">${lineRow({ d: "", q: 1, p: "" })}</div><button id="al">Ajouter une ligne</button>
+  const title = ex ? (sup ? "Modifier l'achat " : "Modifier la facture ") + esc(ex.no) : (sup ? "Nouvel achat " : "Nouvelle facture ") + nextNo(curKind());
+  const lines = ex && ex.items.length ? ex.items.map(lineRow).join("") : lineRow({ d: "", q: 1, p: "" });
+  dlgOpen(`<h2>${title}</h2>
+  <div class="two"><div><label for="g1">Date</label><input type="date" id="g1" value="${ex ? ex.date : today()}"></div><div><label for="g2">Échéance</label><input type="date" id="g2" value="${ex ? (ex.due || "") : d30}"></div></div>
+  <label>Articles</label><div id="ls">${lines}</div><button id="al">Ajouter une ligne</button>
+  <p class="mut">Pour retirer une ligne, videz son article ou mettez sa quantité à 0.</p>
   <p class="amt" id="tt">Total : ${fmt(0)}</p>
-  <div class="acts"><button class="p" id="ok">${curKind() === "fournisseur" ? "Enregistrer l'achat" : "Créer la facture"}</button><button id="no">Annuler</button></div>`);
+  <div class="acts"><button class="p" id="ok">${ex ? "Enregistrer les modifications" : (sup ? "Enregistrer l'achat" : "Créer la facture")}</button><button id="no">Annuler</button></div>`);
   const sum = () => { let t = 0; document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"); t += (+i[1].value || 0) * (+i[2].value || 0); }); $("#tt").textContent = "Total : " + fmt(t); };
-  $("#ls").oninput = sum; $("#al").onclick = () => $("#ls").insertAdjacentHTML("beforeend", lineRow({ d: "", q: 1, p: "" })); $("#no").onclick = dlgClose;
+  sum(); $("#ls").oninput = sum; $("#al").onclick = () => $("#ls").insertAdjacentHTML("beforeend", lineRow({ d: "", q: 1, p: "" })); $("#no").onclick = dlgClose;
   $("#ok").onclick = () => {
     const items = [];
     document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"), q = +i[1].value || 0, p = +i[2].value || 0; if (i[0].value.trim() && q > 0 && p > 0) items.push({ d: i[0].value.trim(), q, p }); });
     if (!items.length) { alert("Ajoutez au moins un article avec quantité et prix."); return; }
-    S.invoices.push({ id: uuid(), cid, no: nextNo(curKind()), date: $("#g1").value || today(), due: $("#g2").value, items });
+    const date = $("#g1").value || today(), due = $("#g2").value;
+    if (ex) Object.assign(ex, { date, due, items });
+    else S.invoices.push({ id: uuid(), cid, no: nextNo(curKind()), date, due, items });
     dlgClose(); render(); save();
   };
 }
@@ -282,8 +288,8 @@ function invView(id) {
   dlgOpen(`<div id="inv"><h2>${curKind() === "fournisseur" ? "Achat" : "Facture"} ${esc(i.no)}</h2><p class="mut">${esc(S.shop)}<br>${curKind() === "fournisseur" ? "Fournisseur" : "Client"} : ${esc(c.name)}<br>Date : ${fd(i.date)}${i.due ? " · Échéance : " + fd(i.due) : ""}</p>
   <div class="wrap"><table><tr><th>Article</th><th>Détail</th><th>Montant</th></tr>${rows}</table></div>
   <p class="amt">Total : ${fmt(i.total)}<br>Payé : ${fmt(i.paid)}<br>Reste : ${fmt(i.rest)} <span class="tag ${i.st[1]}">${i.st[0]}</span></p></div>
-  <div class="acts"><button class="p" id="dl">Télécharger la facture PDF</button><button id="iw">📲 Envoyer la facture PDF sur WhatsApp</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
-  $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print();
+  <div class="acts"><button class="p" id="dl">Télécharger la facture PDF</button><button id="iw">📲 Envoyer la facture PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
+  $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => invForm(id);
   const tel = (c.phone || "").replace(/\D/g, ""), fname = "facture-" + i.no + ".pdf";
   $("#dl").onclick = async () => { const d = await invoicePdf(i, c); if (d) saveFile(pdfFile(d, fname)); };
   $("#iw").onclick = async () => { const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
@@ -364,7 +370,9 @@ async function adminView() {
   dlgOpen(`<h2>Abonnés (${data.length})</h2><div class="list" style="margin-top:10px">${rows || '<div class="empty">Aucun abonné.</div>'}</div><div class="acts"><button id="no">Fermer</button></div>`);
   $("#no").onclick = dlgClose;
   document.querySelectorAll("[data-ex]").forEach(b => { b.onclick = async () => {
-    const s = data.find(x => x.user_id === b.dataset.ex), base = Math.max(Date.now(), s.paid_until ? Date.parse(s.paid_until) : 0);
+    const s0 = data.find(x => x.user_id === b.dataset.ex);
+    if (!confirm("Ajouter 30 jours payés à " + (s0.email || "cet abonné") + " ?")) return;
+    const s = s0, base = Math.max(Date.now(), s.paid_until ? Date.parse(s.paid_until) : 0);
     const r = await sb.from("subscriptions").update({ paid_until: new Date(base + 30 * 864e5).toISOString() }).eq("user_id", s.user_id);
     if (r.error) alert(r.error.message); adminView();
   }; });
@@ -592,17 +600,23 @@ function renderNewPassword() {
 }
 function changePassword() {
   dlgOpen(`<h2>Changer le mot de passe</h2>
+  <label for="c0">Mot de passe actuel</label><input id="c0" type="password" autocomplete="current-password">
   <label for="c1">Nouveau mot de passe (8 caractères minimum)</label><input id="c1" type="password" autocomplete="new-password">
   <label for="c2">Répétez-le</label><input id="c2" type="password" autocomplete="new-password">
   <p class="mut" id="cm"></p>
   <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button></div>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = async () => {
-    const p1 = $("#c1").value, p2 = $("#c2").value, m = $("#cm");
+    const p0 = $("#c0").value, p1 = $("#c1").value, p2 = $("#c2").value, m = $("#cm");
+    if (!p0) { m.textContent = "Entrez votre mot de passe actuel."; return; }
     if (p1.length < 8) { m.textContent = "8 caractères au minimum."; return; }
     if (p1 !== p2) { m.textContent = "Les deux mots de passe ne sont pas identiques."; return; }
-    m.textContent = "Un instant…";
+    if (p1 === p0) { m.textContent = "Le nouveau mot de passe doit être différent de l'actuel."; return; }
+    m.textContent = "Un instant…"; $("#ok").disabled = true;
+    const chk = await sb.auth.signInWithPassword({ email: user.email, password: p0 });
+    if (chk.error) { $("#ok").disabled = false; m.textContent = "Mot de passe actuel incorrect."; return; }
     const { error } = await sb.auth.updateUser({ password: p1 });
+    $("#ok").disabled = false;
     if (error) { m.textContent = "Échec : " + error.message; return; }
     dlgClose(); alert("Mot de passe changé.");
   };
