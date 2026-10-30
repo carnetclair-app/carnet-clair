@@ -170,7 +170,7 @@ function renderAuth(mode) {
     if (!email || password.length < 8) { m.textContent = "Entrez un e-mail et un mot de passe de 8 caractères au moins."; return; }
     if (mode === "up" && !$("#at").checked) { m.textContent = "Vous devez accepter les conditions pour continuer."; return; }
     $("#ago").disabled = true; m.textContent = "Un instant…";
-    const res = mode === "in" ? await sb.auth.signInWithPassword({ email, password }) : await sb.auth.signUp({ email, password });
+    const res = mode === "in" ? await sb.auth.signInWithPassword({ email, password }) : await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
     $("#ago").disabled = false;
     if (res.error) { m.textContent = "Échec : " + res.error.message; return; }
     if (mode === "up" && !res.data.session) m.textContent = "Compte créé. Vérifiez votre boîte e-mail pour confirmer, puis connectez-vous.";
