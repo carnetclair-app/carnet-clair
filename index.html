@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
+<meta name="carnet-clair-version" content="2026-10-31">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -52,6 +53,10 @@ table{width:100%;border-collapse:collapse;font-size:15px}
 td,th{padding:6px 4px;text-align:left;border-bottom:1px solid var(--line)}
 td:last-child,th:last-child{text-align:right}
 .wrap{overflow-x:auto}
+.pw{position:relative}.pw input{padding-right:104px}
+.eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);min-height:34px;padding:4px 10px;font-size:14px}
+.hero .hz{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.hero .hide{background:rgba(255,255,255,.18);color:inherit;border:none;min-height:34px;padding:4px 12px;font-size:14px;border-radius:99px}
 .chk{display:flex;gap:8px;align-items:flex-start;color:var(--ink);font-size:14px}
 .chk input{width:auto;min-height:0;margin-top:4px}
 @media print{body *{visibility:hidden}#inv,#inv *{visibility:visible}#inv{position:absolute;left:0;top:0;width:100%;color:#000}}
@@ -71,10 +76,13 @@ const SUPABASE_KEY = "sb_publishable_Jz2Kt1WlETaj8tSbzbom0w_yZ5SEB-J";
 
 let sb = null, user = null, sub = null, isAdm = false, cid = null, cfgS = "", tab = "client";
 let recovering = /type=recovery/.test(location.hash);
+let locked = false, hiddenAt = 0;
+let hideAmt = false; try { hideAmt = localStorage.getItem("cc_hide_amounts") === "1"; } catch (e) {}
+const mfmt = n => hideAmt ? "•••••• " + S.cur : fmt(n);
 let S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" };
 let syn = { clients: {}, invoices: {}, payments: {} };
 const $ = s => document.querySelector(s);
-const app = h => { $("#app").innerHTML = h; };
+const app = h => { $("#app").innerHTML = h; addEyes($("#app")); };
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const today = () => new Date().toISOString().slice(0, 10);
 const fd = d => d ? d.split("-").reverse().join("/") : "";
@@ -159,7 +167,7 @@ function renderAuth(mode) {
   app(`<div class="top"><h1>Carnet Clair</h1></div>
   <div class="hero"><small>Suivez vos clients, vos factures et vos paiements</small><div class="big" style="font-size:24px">${mode === "in" ? "Connexion" : "Créer mon compte"}</div></div>
   <label for="ae">E-mail</label><input id="ae" type="email" autocomplete="email" inputmode="email">
-  <label for="ap">Mot de passe (8 caractères minimum)</label><input id="ap" type="password" autocomplete="${mode === "in" ? "current-password" : "new-password"}">
+  <label for="ap">${mode === "in" ? "Mot de passe" : "Mot de passe (8 caractères minimum, avec majuscule, minuscule et chiffre)"}</label><input id="ap" type="password" autocomplete="${mode === "in" ? "current-password" : "new-password"}">
   ${mode === "up" ? '<label class="chk" style="margin-top:12px"><input type="checkbox" id="at"><span>J\'accepte les conditions d\'utilisation et la politique de confidentialité.</span></label>' : ""}
   <p class="mut" id="am"></p>
   <div class="acts"><button class="p" id="ago">${mode === "in" ? "Se connecter" : "Créer mon compte"}</button><button id="asw">${mode === "in" ? "Créer un compte" : "J'ai déjà un compte"}</button></div>${mode === "in" ? '<p style="margin-top:12px"><button id="afg" style="border:none;background:none;text-decoration:underline;min-height:0;padding:6px 0">Mot de passe oublié ?</button></p>' : ""}`);
@@ -167,7 +175,8 @@ function renderAuth(mode) {
   if ($("#afg")) $("#afg").onclick = () => renderReset();
   $("#ago").onclick = async () => {
     const email = $("#ae").value.trim(), password = $("#ap").value, m = $("#am");
-    if (!email || password.length < 8) { m.textContent = "Entrez un e-mail et un mot de passe de 8 caractères au moins."; return; }
+    const minLen = mode === "up" ? 8 : 6;
+    if (!email || password.length < minLen) { m.textContent = "Entrez un e-mail et un mot de passe de " + minLen + " caractères au moins."; return; }
     if (mode === "up" && !$("#at").checked) { m.textContent = "Vous devez accepter les conditions pour continuer."; return; }
     $("#ago").disabled = true; m.textContent = "Un instant…";
     const res = mode === "in" ? await sb.auth.signInWithPassword({ email, password }) : await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
@@ -180,20 +189,21 @@ function renderAuth(mode) {
 /* ---------- Écrans ---------- */
 function render() {
   if (!user) return renderAuth();
+  if (locked) return renderLock();
   const si = subInfo(); let h = "";
   const banner = si.text ? `<p style="margin:-6px 0 12px"><span class="tag ${si.cls}">${esc(si.text)}</span></p>` : "";
   if (!cid) {
     const sup = tab === "fournisseur", t = all(tab), list = S.clients.filter(c => (c.kind || "client") === tab);
     h += `<div class="top"><h1>Carnet Clair</h1><button id="bk">Réglages</button></div>${banner}`;
     h += `<div class="acts" style="margin:0 0 12px"><button id="tc" class="${sup ? "" : "p"}">Clients</button><button id="tf" class="${sup ? "p" : ""}">Fournisseurs</button></div>`;
-    h += `<div class="hero"><small>${sup ? "Reste à payer à mes fournisseurs" : "Reste à encaisser"}</small><div class="big">${fmt(t.d)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${fmt(t.b)}</b></div><div>${sup ? "Payé" : "Encaissé"}<b>${fmt(t.p)}</b></div><div>En retard<b>${fmt(t.l)}</b></div></div></div>`;
+    h += `<div class="hero"><div class="hz"><small>${sup ? "Reste à payer à mes fournisseurs" : "Reste à encaisser"}</small><button class="hide" id="hm" aria-label="${hideAmt ? "Afficher les montants" : "Masquer les montants"}">${hideAmt ? "Afficher" : "Masquer"}</button></div><div class="big">${mfmt(t.d)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${mfmt(t.b)}</b></div><div>${sup ? "Payé" : "Encaissé"}<b>${mfmt(t.p)}</b></div><div>En retard<b>${mfmt(t.l)}</b></div></div></div>`;
     h += `<div class="bar"><button class="p" id="nc">${sup ? "Nouveau fournisseur" : "Nouveau client"}</button></div>`;
     if (!list.length) h += `<div class="empty">${sup ? "Aucun fournisseur. Ajoutez un fournisseur, puis notez vos achats et vos paiements." : "Aucun client. Ajoutez votre premier client, puis créez sa première facture."}</div>`;
     else {
       h += `<div class="list">`;
       list.slice().sort((a, b) => calc(b.id).due - calc(a.id).due).forEach(c => {
         const x = calc(c.id);
-        h += `<button class="item" data-c="${c.id}"><span><b>${esc(c.name)}</b><br><span class="mut">${x.inv.length} ${sup ? "achat(s)" : "facture(s)"}${x.late ? ' · <span class="tag late">En retard</span>' : ""}</span></span><span class="amt">${x.due ? fmt(x.due) : '<span class="tag ok">À jour</span>'}</span></button>`;
+        h += `<button class="item" data-c="${c.id}"><span><b>${esc(c.name)}</b><br><span class="mut">${x.inv.length} ${sup ? "achat(s)" : "facture(s)"}${x.late ? ' · <span class="tag late">En retard</span>' : ""}</span></span><span class="amt">${x.due ? mfmt(x.due) : '<span class="tag ok">À jour</span>'}</span></button>`;
       });
       h += `</div>`;
     }
@@ -227,13 +237,24 @@ function render() {
 }
 function on(s, f) { const e = $(s); if (e) e.onclick = f; }
 function bind() {
-  on("#nc", () => clientForm(null, tab)); on("#tc", () => { tab = "client"; render(); }); on("#tf", () => { tab = "fournisseur"; render(); }); on("#ec", () => clientForm(cid)); on("#back", () => { cid = null; render(); });
+  on("#nc", () => clientForm(null, tab)); on("#tc", () => { tab = "client"; render(); }); on("#hm", () => { hideAmt = !hideAmt; try { localStorage.setItem("cc_hide_amounts", hideAmt ? "1" : "0"); } catch (e) {} render(); }); on("#tf", () => { tab = "fournisseur"; render(); }); on("#ec", () => clientForm(cid)); on("#back", () => { cid = null; render(); });
   on("#ni", () => invForm()); on("#np", () => payForm()); on("#rl", relance); on("#sh", shareStatement); on("#bk", settings);
   document.querySelectorAll("[data-c]").forEach(b => { b.onclick = () => { cid = b.dataset.c; render(); window.scrollTo(0, 0); }; });
   document.querySelectorAll("[data-i]").forEach(b => { b.onclick = () => invView(b.dataset.i); });
   document.querySelectorAll("[data-p]").forEach(b => { b.onclick = () => payForm(b.dataset.p); });
 }
-function dlgOpen(h) { const d = $("#dlg"); d.innerHTML = h; if (!d.open) d.showModal(); return d; }
+function dlgOpen(h) { const d = $("#dlg"); d.innerHTML = h; addEyes(d); if (!d.open) d.showModal(); return d; }
+function addEyes(root) {
+  root.querySelectorAll('input[type="password"]').forEach(inp => {
+    if (inp.dataset.eye) return; inp.dataset.eye = "1";
+    const w = document.createElement("div"); w.className = "pw";
+    inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
+    const b = document.createElement("button"); b.type = "button"; b.className = "eye"; b.textContent = "Afficher";
+    b.setAttribute("aria-label", "Afficher le mot de passe");
+    b.onclick = () => { const show = inp.type === "password"; inp.type = show ? "text" : "password"; b.textContent = show ? "Masquer" : "Afficher"; b.setAttribute("aria-label", show ? "Masquer le mot de passe" : "Afficher le mot de passe"); inp.focus(); };
+    w.appendChild(b);
+  });
+}
 function dlgClose() { $("#dlg").close(); }
 
 function clientForm(id, kind) {
@@ -344,7 +365,7 @@ function settings() {
   <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" value="${esc(S.shop)}">
   <label for="s2">Devise</label><input id="s2" value="${esc(S.cur)}">
   <p class="mut">Pensez à exporter une sauvegarde de temps en temps.</p>
-  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Exporter</button><button id="im">Importer</button>${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Exporter</button><button id="im">Importer</button>${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
   <input type="file" id="fl" accept=".json" hidden>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = () => { S.shop = $("#s1").value.trim(); S.cur = cleanCur($("#s2").value); dlgClose(); render(); save(); };
@@ -358,6 +379,8 @@ function settings() {
   };
   $("#lo").onclick = () => { dlgClose(); sb.auth.signOut(); };
   $("#pw").onclick = changePassword;
+  $("#pin").onclick = pinSettings;
+  if (isAdm) $("#mfa").onclick = mfaSettings;
   if (isAdm) $("#ad").onclick = adminView;
 }
 async function adminView() {
@@ -622,6 +645,145 @@ function changePassword() {
   };
 }
 
+/* ---------- Code PIN (sur cet appareil) ---------- */
+const pinKey = () => "cc_pin_" + (user ? user.id : "");
+function getPin() { try { const v = localStorage.getItem(pinKey()); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+function setPinRec(rec) { try { if (rec) localStorage.setItem(pinKey(), JSON.stringify(rec)); else localStorage.removeItem(pinKey()); return true; } catch (e) { return false; } }
+async function hashPin(pin, salt) {
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(salt + ":" + pin));
+  return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, "0")).join("");
+}
+const okPin = p => /^[0-9]{4,6}$/.test(p);
+function renderLock() {
+  app(`<div class="top"><h1>Carnet Clair</h1></div>
+  <div class="hero"><small>Application verrouillée</small><div class="big" style="font-size:22px">Entrez votre code PIN</div></div>
+  <label for="pn">Code PIN</label><input id="pn" type="password" inputmode="numeric" autocomplete="off" maxlength="6">
+  <p class="mut" id="pm"></p>
+  <div class="acts"><button class="p" id="pgo">Déverrouiller</button><button id="pfo">Code oublié ? Se déconnecter</button></div>`);
+  const go = async () => {
+    const rec = getPin(), m = $("#pm"), v = $("#pn").value.trim();
+    if (!rec) { locked = false; render(); return; }
+    if (!v) { m.textContent = "Entrez votre code PIN."; return; }
+    if ((await hashPin(v, rec.salt)) === rec.hash) { rec.fails = 0; setPinRec(rec); locked = false; render(); return; }
+    rec.fails = (rec.fails || 0) + 1;
+    if (rec.fails >= 5) { setPinRec(null); locked = false; alert("5 codes incorrects : vous êtes déconnecté. Reconnectez-vous avec votre e-mail et votre mot de passe."); sb.auth.signOut(); return; }
+    setPinRec(rec); $("#pn").value = ""; m.textContent = "Code incorrect. Il reste " + (5 - rec.fails) + " essai(s).";
+  };
+  $("#pgo").onclick = go;
+  $("#pn").onkeydown = e => { if (e.key === "Enter") go(); };
+  $("#pfo").onclick = () => { if (confirm("Vous allez être déconnecté. Il faudra retaper votre e-mail et votre mot de passe, puis choisir un nouveau code. Continuer ?")) { setPinRec(null); locked = false; sb.auth.signOut(); } };
+  setTimeout(() => { const i = $("#pn"); if (i) i.focus(); }, 50);
+}
+function pinSettings() {
+  const rec = getPin();
+  if (!rec) return pinSetForm();
+  dlgOpen(`<h2>Code PIN</h2><p class="mut">Le code PIN est activé sur ce téléphone. Il est demandé à l'ouverture de l'application et après 2 minutes passées ailleurs.</p>
+  <label for="q0">Code actuel</label><input id="q0" type="password" inputmode="numeric" autocomplete="off" maxlength="6">
+  <p class="mut" id="qm"></p>
+  <div class="acts"><button class="p" id="qch">Changer le code</button><button class="d" id="qoff">Désactiver</button><button id="no">Fermer</button></div>`);
+  $("#no").onclick = dlgClose;
+  const check = async () => { const v = $("#q0").value.trim(); if (v && (await hashPin(v, rec.salt)) === rec.hash) return true; $("#qm").textContent = "Code actuel incorrect."; return false; };
+  $("#qch").onclick = async () => { if (await check()) pinSetForm(); };
+  $("#qoff").onclick = async () => { if (await check()) { setPinRec(null); dlgClose(); alert("Code PIN désactivé sur ce téléphone."); } };
+}
+function pinSetForm() {
+  dlgOpen(`<h2>Choisir un code PIN</h2><p class="mut">4 à 6 chiffres. Il protège l'application sur <b>ce téléphone</b> seulement. Évitez 0000, 1234 ou votre date de naissance.</p>
+  <label for="q1">Nouveau code</label><input id="q1" type="password" inputmode="numeric" autocomplete="off" maxlength="6">
+  <label for="q2">Répétez-le</label><input id="q2" type="password" inputmode="numeric" autocomplete="off" maxlength="6">
+  <p class="mut" id="qm"></p>
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button></div>`);
+  $("#no").onclick = dlgClose;
+  $("#ok").onclick = async () => {
+    const a = $("#q1").value.trim(), b = $("#q2").value.trim(), m = $("#qm");
+    if (!okPin(a)) { m.textContent = "Le code doit avoir 4 à 6 chiffres."; return; }
+    if (/^(\d)\1+$/.test(a) || "0123456789".indexOf(a) > -1 || "9876543210".indexOf(a) > -1) { m.textContent = "Code trop facile à deviner. Choisissez-en un autre."; return; }
+    if (a !== b) { m.textContent = "Les deux codes ne sont pas identiques."; return; }
+    const salt = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(x => x.toString(16).padStart(2, "0")).join("");
+    if (!setPinRec({ salt, hash: await hashPin(a, salt), fails: 0 })) { m.textContent = "Impossible d'enregistrer le code sur ce téléphone (navigation privée ?)."; return; }
+    dlgClose(); alert("Code PIN activé sur ce téléphone.");
+  };
+}
+
+/* ---------- Code Authenticator (deuxième facteur) ---------- */
+async function mfaGate() {
+  try {
+    const { data, error } = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error || !data) return true;
+    if (data.nextLevel === "aal2" && data.currentLevel !== "aal2") {
+      const f = await sb.auth.mfa.listFactors();
+      const t = f.data && f.data.totp && f.data.totp.find(x => x.status === "verified");
+      if (t) { renderMfa(t.id); return false; }
+    }
+  } catch (e) {}
+  return true;
+}
+async function mfaVerify(factorId, code) {
+  const c = await sb.auth.mfa.challenge({ factorId });
+  if (c.error) return c.error;
+  const v = await sb.auth.mfa.verify({ factorId, challengeId: c.data.id, code });
+  return v.error || null;
+}
+function renderMfa(factorId) {
+  app(`<div class="top"><h1>Carnet Clair</h1></div>
+  <div class="hero"><small>Vérification en deux étapes</small><div class="big" style="font-size:22px">Code de l'application Authenticator</div></div>
+  <label for="mc">Code à 6 chiffres</label><input id="mc" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+  <p class="mut" id="mm">Ouvrez Google Authenticator et tapez le code de « Carnet Clair ».</p>
+  <div class="acts"><button class="p" id="mgo">Valider</button><button id="mlo">Se déconnecter</button></div>`);
+  const go = async () => {
+    const code = $("#mc").value.replace(/\D/g, ""), m = $("#mm");
+    if (code.length !== 6) { m.textContent = "Le code a 6 chiffres."; return; }
+    $("#mgo").disabled = true; m.textContent = "Un instant…";
+    const err = await mfaVerify(factorId, code);
+    $("#mgo").disabled = false;
+    if (err) { m.textContent = "Code refusé. Attendez le code suivant et réessayez."; $("#mc").value = ""; return; }
+    locked = false; loadAll(true);
+  };
+  $("#mgo").onclick = go;
+  $("#mc").onkeydown = e => { if (e.key === "Enter") go(); };
+  $("#mlo").onclick = () => sb.auth.signOut();
+}
+async function mfaSettings() {
+  const f = await sb.auth.mfa.listFactors();
+  if (f.error) { alert("Erreur : " + f.error.message); return; }
+  const all = (f.data && f.data.all) || [];
+  const ver = all.find(x => x.factor_type === "totp" && x.status === "verified");
+  if (ver) {
+    dlgOpen(`<h2>Code Authenticator</h2><p class="mut">Activé. Il est demandé à chaque nouvelle connexion de ce compte.</p>
+    <div class="acts"><button id="no">Fermer</button><button class="d" id="moff">Désactiver</button></div>`);
+    $("#no").onclick = dlgClose;
+    $("#moff").onclick = async () => {
+      if (!confirm("Désactiver le code Authenticator ? Votre compte administrateur sera moins protégé.")) return;
+      const r = await sb.auth.mfa.unenroll({ factorId: ver.id });
+      if (r.error) { alert("Erreur : " + r.error.message); return; }
+      dlgClose(); alert("Code Authenticator désactivé. Supprimez aussi « Carnet Clair » dans l'application Authenticator.");
+    };
+    return;
+  }
+  for (const x of all) { if (x.status !== "verified") await sb.auth.mfa.unenroll({ factorId: x.id }); }
+  const e = await sb.auth.mfa.enroll({ factorType: "totp", friendlyName: "Carnet Clair administrateur" });
+  if (e.error) { alert("Erreur : " + e.error.message); return; }
+  const fid = e.data.id, secret = e.data.totp.secret, qr = e.data.totp.qr_code;
+  dlgOpen(`<h2>Activer le code Authenticator</h2>
+  <p class="mut">1. Ouvrez Google Authenticator, appuyez sur <b>+</b>, puis <b>Saisir une clé de configuration</b>. Nom : <b>Carnet Clair</b>. Clé :</p>
+  <p class="amt" style="word-break:break-all;user-select:all">${esc(secret)}</p>
+  <div class="acts" style="margin-top:0"><button id="mcp">Copier la clé</button></div>
+  ${qr ? `<p class="mut">Ou scannez ce code depuis un autre téléphone :</p><img alt="Code QR" src="${esc(qr)}" style="width:180px;height:180px;background:#fff;border-radius:8px;padding:6px">` : ""}
+  <p class="mut">2. Notez cette clé sur papier, en lieu sûr : elle permet de recréer le code si vous perdez le téléphone.</p>
+  <label for="mv">3. Tapez le code à 6 chiffres affiché</label><input id="mv" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+  <p class="mut" id="mm"></p>
+  <div class="acts"><button class="p" id="ok">Activer</button><button id="no">Annuler</button></div>`);
+  $("#mcp").onclick = () => { try { navigator.clipboard.writeText(secret); $("#mcp").textContent = "Copiée"; } catch (x) {} };
+  $("#no").onclick = async () => { dlgClose(); await sb.auth.mfa.unenroll({ factorId: fid }); };
+  $("#ok").onclick = async () => {
+    const code = $("#mv").value.replace(/\D/g, ""), m = $("#mm");
+    if (code.length !== 6) { m.textContent = "Le code a 6 chiffres."; return; }
+    m.textContent = "Un instant…";
+    const err = await mfaVerify(fid, code);
+    if (err) { m.textContent = "Code refusé. Vérifiez la clé dans Authenticator et attendez le code suivant."; return; }
+    dlgClose(); alert("Code Authenticator activé. Il sera demandé à chaque nouvelle connexion.");
+  };
+}
+
 /* ---------- Démarrage ---------- */
 function boot() {
   if (SUPABASE_URL.indexOf("VOTRE") > -1 || typeof supabase === "undefined") {
@@ -636,12 +798,20 @@ function boot() {
     if (recovering && u) { user = u; setTimeout(renderNewPassword, 0); return; }
     if (!changed && ev !== "INITIAL_SESSION") return;
     user = u;
-    setTimeout(() => {
-      if (user) loadAll(true);
+    setTimeout(async () => {
+      if (user) {
+        if (!(await mfaGate())) return;
+        locked = ev === "INITIAL_SESSION" && !!getPin();
+        loadAll(true);
+      }
       else { S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" }; sub = null; isAdm = false; cid = null; renderAuth(); }
     }, 0);
   });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && user && !$("#dlg").open) queue = queue.then(() => loadAll(false)); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    if (user && !locked && getPin() && hiddenAt && Date.now() - hiddenAt > 120000) { locked = true; if ($("#dlg").open) $("#dlg").close(); render(); return; }
+    if (user && !locked && !$("#dlg").open) queue = queue.then(() => loadAll(false));
+  });
 }
 boot();
 if ('serviceWorker' in navigator) { window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); }); }
