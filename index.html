@@ -89,7 +89,8 @@ const fd = d => d ? d.split("-").reverse().join("/") : "";
 const fmt = n => Math.round(n).toLocaleString("fr-FR").replace(/[\u202f\u00a0]/g, " ") + " " + S.cur;
 const tot = i => i.items.reduce((a, l) => a + l.q * l.p, 0);
 const uuid = () => crypto.randomUUID();
-const cleanCur = c => String(c == null ? "" : c).replace(/[^A-Za-z0-9\u00C0-\u024F\u0600-\u06FF .$€£-]/g, "").trim().slice(0, 8) || "GNF";
+/* Devise : lettres ou symbole seulement (jamais de chiffres, sinon « 650000 » s'affiche après chaque montant). */
+const cleanCur = c => String(c == null ? "" : c).replace(/[^A-Za-z\u00C0-\u024F\u0600-\u06FF .$€£-]/g, "").replace(/[\u0660-\u0669\u06F0-\u06F9]/g, "").trim().slice(0, 8) || "GNF";
 
 /* ---------- Abonnement ---------- */
 function subInfo() {
@@ -196,6 +197,9 @@ function render() {
   if (!cid) {
     const sup = tab === "fournisseur", t = all(tab), list = S.clients.filter(c => (c.kind || "client") === tab);
     h += `<div class="top"><h1>Carnet Clair</h1><button id="bk">Réglages</button></div>${banner}`;
+    const lx = lastExport(), days = lx ? Math.floor((Date.now() - lx) / 864e5) : -1;
+    if (S.invoices.length + S.payments.length > 0 && (days < 0 || days >= 7))
+      h += `<div class="item" style="margin:0 0 12px;cursor:default"><span class="mut">${days < 0 ? "Aucune sauvegarde de vos données sur ce téléphone." : "Dernière sauvegarde il y a " + days + " jours."}</span><button id="bkx">Sauvegarder</button></div>`;
     h += `<div class="acts" style="margin:0 0 12px"><button id="tc" class="${sup ? "" : "p"}">Clients</button><button id="tf" class="${sup ? "p" : ""}">Fournisseurs</button></div>`;
     h += `<div class="hero"><div class="hz"><small>${sup ? "Reste à payer à mes fournisseurs" : "Reste à encaisser"}</small><button class="hide" id="hm" aria-label="${hideAmt ? "Afficher les montants" : "Masquer les montants"}">${hideAmt ? "Afficher" : "Masquer"}</button></div><div class="big">${mfmt(t.d)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${mfmt(t.b)}</b></div><div>${sup ? "Payé" : "Encaissé"}<b>${mfmt(t.p)}</b></div><div>En retard<b>${mfmt(t.l)}</b></div></div></div>`;
     h += `<div class="bar"><button class="p" id="nc">${sup ? "Nouveau fournisseur" : "Nouveau client"}</button></div>`;
@@ -239,7 +243,7 @@ function render() {
 function on(s, f) { const e = $(s); if (e) e.onclick = f; }
 function bind() {
   on("#nc", () => clientForm(null, tab)); on("#tc", () => { tab = "client"; render(); }); on("#hm", () => { hideAmt = !hideAmt; try { localStorage.setItem("cc_hide_amounts", hideAmt ? "1" : "0"); } catch (e) {} render(); }); on("#tf", () => { tab = "fournisseur"; render(); }); on("#ec", () => clientForm(cid)); on("#back", () => { cid = null; render(); });
-  on("#ni", () => invForm()); on("#np", () => payForm()); on("#rl", relance); on("#sh", shareStatement); on("#bk", settings);
+  on("#ni", () => invForm()); on("#np", () => payForm()); on("#rl", relance); on("#sh", shareStatement); on("#bk", settings); on("#bkx", exportJson);
   document.querySelectorAll("[data-c]").forEach(b => { b.onclick = () => { cid = b.dataset.c; render(); window.scrollTo(0, 0); }; });
   document.querySelectorAll("[data-i]").forEach(b => { b.onclick = () => invView(b.dataset.i); });
   document.querySelectorAll("[data-p]").forEach(b => { b.onclick = () => payForm(b.dataset.p); });
@@ -280,7 +284,7 @@ function clientForm(id, kind) {
     }
   };
 }
-const lineRow = l => `<div class="ln"><input placeholder="Article" aria-label="Article" value="${esc(l.d)}"><input type="number" inputmode="decimal" min="0" placeholder="Qté" aria-label="Quantité" value="${l.q || ""}"><input type="number" inputmode="decimal" min="0" placeholder="Prix unitaire" aria-label="Prix unitaire" value="${l.p || ""}"></div>`;
+const lineRow = l => `<div class="ln"><input placeholder="Article" aria-label="Article" value="${esc(l.d)}"><input type="number" inputmode="decimal" min="0" placeholder="Qté" aria-label="Quantité" value="${Number(l.q) || ""}"><input type="number" inputmode="decimal" min="0" placeholder="Prix unitaire" aria-label="Prix unitaire" value="${Number(l.p) || ""}"></div>`;
 function invForm(id) {
   const ex = id ? S.invoices.find(x => x.id === id) : null, sup = curKind() === "fournisseur";
   const d30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
@@ -349,23 +353,38 @@ function relance() {
 }
 
 /* ---------- Réglages, sauvegarde, administration ---------- */
+/* Sauvegarde : fichier téléchargé + copie à s'envoyer (Drive, WhatsApp, e-mail). La date est retenue sur ce téléphone. */
+const bkKey = () => "cc_last_export_" + (user ? user.id : "");
+function lastExport() { try { return +localStorage.getItem(bkKey()) || 0; } catch (e) { return 0; } }
 function exportJson() {
-  const b = new Blob([JSON.stringify({ clients: S.clients, invoices: S.invoices, payments: S.payments, cur: S.cur, shop: S.shop })], { type: "application/json" });
-  const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "carnet-clients-" + today() + ".json"; document.body.appendChild(a); a.click(); a.remove();
+  const data = JSON.stringify({ app: "Carnet Clair", exportedAt: new Date().toISOString(), clients: S.clients, invoices: S.invoices, payments: S.payments, cur: S.cur, shop: S.shop });
+  const name = "carnet-clair-sauvegarde-" + today() + ".json";
+  const file = new File([data], name, { type: "application/json" });
+  saveFile(file);
+  try { localStorage.setItem(bkKey(), String(Date.now())); } catch (e) {}
+  const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  dlgOpen(`<h2>Sauvegarde enregistrée</h2>
+  <p class="mut">Le fichier ${esc(name)} est dans Téléchargements, sur ce téléphone. Si le téléphone est perdu, ce fichier l'est aussi : envoyez-vous une copie (Google Drive, e-mail ou WhatsApp à vous-même).</p>
+  <p class="mut">Ce fichier contient vos clients et vos montants : ne l'envoyez à personne d'autre.</p>
+  <div class="acts">${canShare ? '<button class="p" id="bsh">Envoyer une copie</button>' : ""}<button id="no">Fermer</button></div>`);
+  $("#no").onclick = () => { dlgClose(); render(); };
+  if (canShare) $("#bsh").onclick = async () => { try { await navigator.share({ files: [file], title: name }); } catch (e) {} dlgClose(); render(); };
 }
 function importData(o) {
   const m = {};
-  (o.clients || []).forEach(c => { const id = uuid(); m[c.id] = id; S.clients.push({ id, name: c.name || "Sans nom", phone: c.phone || "", note: c.note || "", kind: c.kind || "client" }); });
-  (o.invoices || []).forEach(i => { if (m[i.cid]) S.invoices.push({ id: uuid(), cid: m[i.cid], no: i.no, date: i.date, due: i.due || "", items: i.items || [] }); });
-  (o.payments || []).forEach(p => { if (m[p.cid]) S.payments.push({ id: uuid(), cid: m[p.cid], date: p.date, amt: +p.amt || 0, method: p.method || "Espèces", note: p.note || "" }); });
+  (o.clients || []).forEach(c => { const id = uuid(); m[c.id] = id; S.clients.push({ id, name: String(c.name || "Sans nom").slice(0, 120), phone: String(c.phone || "").slice(0, 40), note: String(c.note || "").slice(0, 500), kind: c.kind === "fournisseur" ? "fournisseur" : "client" }); });
+  const okDate = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d || "")) ? String(d) : "";
+  const cleanItems = it => (Array.isArray(it) ? it : []).slice(0, 200).map(l => ({ d: String((l && l.d) || "").slice(0, 200), q: Number(l && l.q) || 0, p: Number(l && l.p) || 0 }));
+  (o.invoices || []).forEach(i => { if (m[i.cid]) S.invoices.push({ id: uuid(), cid: m[i.cid], no: String(i.no || "").slice(0, 40), date: okDate(i.date) || today(), due: okDate(i.due), items: cleanItems(i.items) }); });
+  (o.payments || []).forEach(p => { if (m[p.cid]) S.payments.push({ id: uuid(), cid: m[p.cid], date: okDate(p.date) || today(), amt: +p.amt || 0, method: String(p.method || "Espèces").slice(0, 40), note: String(p.note || "").slice(0, 500) }); });
 }
 function settings() {
   const si = subInfo();
   dlgOpen(`<h2>Réglages</h2>
   <p class="mut">${esc(user.email)}${si.text ? "<br>" + esc(si.text) : ""}</p>
   <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" value="${esc(S.shop)}">
-  <label for="s2">Devise</label><input id="s2" value="${esc(S.cur)}">
-  <p class="mut">Pensez à exporter une sauvegarde de temps en temps.</p>
+  <label for="s2">Devise (lettres seulement, par exemple GNF)</label><input id="s2" value="${esc(S.cur)}" placeholder="GNF" maxlength="8">
+  <p class="mut">Sauvegarde : appuyez sur « Exporter » chaque semaine et envoyez-vous une copie (Drive, e-mail). Pour la restaurer sur un compte vide : « Importer ».</p>
   <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Exporter</button><button id="im">Importer</button>${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
   <input type="file" id="fl" accept=".json" hidden>`);
   $("#no").onclick = dlgClose;
@@ -375,7 +394,9 @@ function settings() {
   $("#fl").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     const r = new FileReader();
-    r.onload = () => { try { const o = JSON.parse(r.result); if (!o || !o.clients) throw 0; importData(o); dlgClose(); render(); save(); } catch (x) { alert("Fichier invalide."); } };
+    r.onload = () => { try { const o = JSON.parse(r.result); if (!o || !Array.isArray(o.clients)) throw 0;
+      if (S.clients.length && !confirm("Importer ajoute les données du fichier à celles déjà présentes : si ce sont les mêmes, elles apparaîtront en double. Continuer ?")) { e.target.value = ""; return; }
+      importData(o); dlgClose(); render(); save(); } catch (x) { alert("Fichier invalide."); } };
     r.readAsText(f);
   };
   $("#lo").onclick = () => { dlgClose(); sb.auth.signOut(); };
