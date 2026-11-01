@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
-<meta name="carnet-clair-version" content="2026-10-31">
+<meta name="carnet-clair-version" content="2026-11-01">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -76,7 +76,7 @@ const SUPABASE_KEY = "sb_publishable_Jz2Kt1WlETaj8tSbzbom0w_yZ5SEB-J";
 
 let sb = null, user = null, sub = null, isAdm = false, cid = null, cfgS = "", tab = "client";
 let recovering = /type=recovery/.test(location.hash);
-let locked = false, hiddenAt = 0;
+let locked = false, hiddenAt = 0, mfaPending = false;
 let hideAmt = false; try { hideAmt = localStorage.getItem("cc_hide_amounts") === "1"; } catch (e) {}
 const mfmt = n => hideAmt ? "•••••• " + S.cur : fmt(n);
 let S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" };
@@ -144,6 +144,7 @@ async function doSave() {
 }
 
 async function loadAll(first) {
+  if (mfaPending) return; /* tant que le code Authenticator n'est pas validé, aucune donnée n'est chargée */
   if (first) app('<p class="mut">Chargement…</p>');
   const r = await Promise.all([
     sb.from("clients").select("*"), sb.from("invoices").select("*"), sb.from("payments").select("*"),
@@ -384,6 +385,10 @@ function settings() {
   if (isAdm) $("#ad").onclick = adminView;
 }
 async function adminView() {
+  try {
+    const lv = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (lv.error || !lv.data || lv.data.currentLevel !== "aal2") return adminStepUp();
+  } catch (e) { return adminStepUp(); }
   const { data, error } = await sb.from("subscriptions").select("*").order("created_at", { ascending: false });
   if (error) { alert(error.message); return; }
   const rows = data.map(s => {
@@ -705,17 +710,48 @@ function pinSetForm() {
 }
 
 /* ---------- Code Authenticator (deuxième facteur) ---------- */
-async function mfaGate() {
+async function mfaGate() { mfaPending = true; const ok = await mfaGate0(); if (ok) mfaPending = false; return ok; }
+async function mfaGate0() {
+  let lv;
+  try { lv = await sb.auth.mfa.getAuthenticatorAssuranceLevel(); } catch (e) { return true; }
+  if (lv.error || !lv.data || lv.data.nextLevel !== "aal2" || lv.data.currentLevel === "aal2") return true;
   try {
-    const { data, error } = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (error || !data) return true;
-    if (data.nextLevel === "aal2" && data.currentLevel !== "aal2") {
-      const f = await sb.auth.mfa.listFactors();
-      const t = f.data && f.data.totp && f.data.totp.find(x => x.status === "verified");
-      if (t) { renderMfa(t.id); return false; }
-    }
-  } catch (e) {}
-  return true;
+    const f = await sb.auth.mfa.listFactors();
+    if (f.error) throw f.error;
+    const t = f.data && f.data.totp && f.data.totp.find(x => x.status === "verified");
+    if (!t) return true;
+    renderMfa(t.id); return false;
+  } catch (e) {
+    app(`<div class="top"><h1>Carnet Clair</h1></div><div class="empty">Vérification du code Authenticator impossible. Vérifiez la connexion Internet.</div>
+    <div class="acts"><button class="p" id="rt">Réessayer</button><button id="lo">Se déconnecter</button></div>`);
+    $("#rt").onclick = async () => { if (await mfaGate()) { locked = false; loadAll(true); } };
+    $("#lo").onclick = () => sb.auth.signOut();
+    return false;
+  }
+}
+/* L'Administration exige une connexion validée par le code (aal2) : sinon on le demande ici. */
+async function adminStepUp() {
+  let t = null;
+  try {
+    const f = await sb.auth.mfa.listFactors();
+    if (f.error) { alert("Erreur : " + f.error.message); return; }
+    t = f.data && f.data.totp && f.data.totp.find(x => x.status === "verified");
+  } catch (e) { alert("Vérification impossible. Vérifiez la connexion Internet."); return; }
+  if (!t) { alert("L'Administration exige le code Authenticator. Activez-le d'abord : Réglages, puis Code Authenticator."); return; }
+  dlgOpen(`<h2>Code Authenticator</h2><p class="mut">L'Administration demande le code de « Carnet Clair » affiché dans Google Authenticator.</p>
+  <label for="mv">Code à 6 chiffres</label><input id="mv" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+  <p class="mut" id="mm"></p>
+  <div class="acts"><button class="p" id="ok">Valider</button><button id="no">Annuler</button></div>`);
+  $("#no").onclick = dlgClose;
+  $("#ok").onclick = async () => {
+    const code = $("#mv").value.replace(/\D/g, ""), m = $("#mm");
+    if (code.length !== 6) { m.textContent = "Le code a 6 chiffres."; return; }
+    $("#ok").disabled = true; m.textContent = "Un instant…";
+    const err = await mfaVerify(t.id, code);
+    $("#ok").disabled = false;
+    if (err) { m.textContent = "Code refusé. Attendez le code suivant et réessayez."; $("#mv").value = ""; return; }
+    adminView();
+  };
 }
 async function mfaVerify(factorId, code) {
   const c = await sb.auth.mfa.challenge({ factorId });
@@ -736,7 +772,7 @@ function renderMfa(factorId) {
     const err = await mfaVerify(factorId, code);
     $("#mgo").disabled = false;
     if (err) { m.textContent = "Code refusé. Attendez le code suivant et réessayez."; $("#mc").value = ""; return; }
-    locked = false; loadAll(true);
+    mfaPending = false; locked = false; loadAll(true);
   };
   $("#mgo").onclick = go;
   $("#mc").onkeydown = e => { if (e.key === "Enter") go(); };
@@ -804,13 +840,13 @@ function boot() {
         locked = ev === "INITIAL_SESSION" && !!getPin();
         loadAll(true);
       }
-      else { S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" }; sub = null; isAdm = false; cid = null; renderAuth(); }
+      else { mfaPending = false; S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" }; sub = null; isAdm = false; cid = null; renderAuth(); }
     }, 0);
   });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) { hiddenAt = Date.now(); return; }
-    if (user && !locked && getPin() && hiddenAt && Date.now() - hiddenAt > 120000) { locked = true; if ($("#dlg").open) $("#dlg").close(); render(); return; }
-    if (user && !locked && !$("#dlg").open) queue = queue.then(() => loadAll(false));
+    if (user && !locked && !mfaPending && getPin() && hiddenAt && Date.now() - hiddenAt > 120000) { locked = true; if ($("#dlg").open) $("#dlg").close(); render(); return; }
+    if (user && !locked && !mfaPending && !$("#dlg").open) queue = queue.then(() => loadAll(false));
   });
 }
 boot();
