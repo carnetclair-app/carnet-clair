@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
-<meta name="carnet-clair-version" content="2026-11-01">
+<meta name="carnet-clair-version" content="2026-11-02">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -77,6 +77,25 @@ const SUPABASE_KEY = "sb_publishable_Jz2Kt1WlETaj8tSbzbom0w_yZ5SEB-J";
 let sb = null, user = null, sub = null, isAdm = false, cid = null, cfgS = "", tab = "client";
 let recovering = /type=recovery/.test(location.hash);
 let locked = false, hiddenAt = 0, mfaPending = false;
+/* Lien de confirmation ou de réinitialisation expiré : Supabase revient avec #error_code=… dans l'adresse. */
+let authMsg = "";
+(function () {
+  const h = new URLSearchParams(location.hash.replace(/^#/, "") || location.search.replace(/^\?/, ""));
+  const code = h.get("error_code") || (h.get("error") ? "x" : "");
+  if (!code) return;
+  authMsg = code === "otp_expired"
+    ? "Ce lien a expiré ou a déjà servi. Entrez votre e-mail et votre mot de passe, puis « Se connecter » : si le compte n'est pas encore confirmé, vous pourrez recevoir un nouveau lien."
+    : "Ce lien n'est pas valide. Connectez-vous, ou demandez un nouveau lien.";
+  try { history.replaceState(null, "", location.pathname); } catch (e) {}
+})();
+const authErr = msg => {
+  const t = String(msg || "");
+  if (/invalid login credentials/i.test(t)) return "E-mail ou mot de passe incorrect.";
+  if (/email not confirmed/i.test(t)) return "Adresse e-mail pas encore confirmée. Ouvrez le dernier e-mail « Confirmez votre adresse » reçu, ou demandez-en un nouveau ci-dessous.";
+  if (/already registered/i.test(t)) return "Un compte existe déjà avec cette adresse : utilisez « Se connecter ».";
+  if (/rate limit|too many/i.test(t)) return "Trop de tentatives. Patientez quelques minutes, puis réessayez.";
+  return "Échec : " + t;
+};
 let hideAmt = false; try { hideAmt = localStorage.getItem("cc_hide_amounts") === "1"; } catch (e) {}
 const mfmt = n => hideAmt ? "•••••• " + S.cur : fmt(n);
 let S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" };
@@ -171,7 +190,8 @@ function renderAuth(mode) {
   <label for="ae">E-mail</label><input id="ae" type="email" autocomplete="email" inputmode="email">
   <label for="ap">${mode === "in" ? "Mot de passe" : "Mot de passe (8 caractères minimum, avec majuscule, minuscule et chiffre)"}</label><input id="ap" type="password" autocomplete="${mode === "in" ? "current-password" : "new-password"}">
   ${mode === "up" ? '<label class="chk" style="margin-top:12px"><input type="checkbox" id="at"><span>J\'accepte les conditions d\'utilisation et la politique de confidentialité.</span></label>' : ""}
-  <p class="mut" id="am"></p>
+  <p class="mut" id="am">${esc(authMsg)}</p>
+  <div class="acts" id="ars" style="display:none"><button id="arsb">Renvoyer l'e-mail de confirmation</button></div>
   <div class="acts"><button class="p" id="ago">${mode === "in" ? "Se connecter" : "Créer mon compte"}</button><button id="asw">${mode === "in" ? "Créer un compte" : "J'ai déjà un compte"}</button></div>${mode === "in" ? '<p style="margin-top:12px"><button id="afg" style="border:none;background:none;text-decoration:underline;min-height:0;padding:6px 0">Mot de passe oublié ?</button></p>' : ""}`);
   $("#asw").onclick = () => renderAuth(mode === "in" ? "up" : "in");
   if ($("#afg")) $("#afg").onclick = () => renderReset();
@@ -183,8 +203,21 @@ function renderAuth(mode) {
     $("#ago").disabled = true; m.textContent = "Un instant…";
     const res = mode === "in" ? await sb.auth.signInWithPassword({ email, password }) : await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
     $("#ago").disabled = false;
-    if (res.error) { m.textContent = "Échec : " + res.error.message; return; }
-    if (mode === "up" && !res.data.session) m.textContent = "Compte créé. Vérifiez votre boîte e-mail pour confirmer, puis connectez-vous.";
+    authMsg = "";
+    if (res.error) {
+      m.textContent = authErr(res.error.message);
+      if (/email not confirmed/i.test(res.error.message)) {
+        $("#ars").style.display = "";
+        $("#arsb").onclick = async () => {
+          $("#arsb").disabled = true; m.textContent = "Un instant…";
+          const r = await sb.auth.resend({ type: "signup", email, options: { emailRedirectTo: location.origin + location.pathname } });
+          $("#arsb").disabled = false;
+          m.textContent = r.error ? authErr(r.error.message) : "Nouvel e-mail envoyé. Ouvrez-le dans l'heure, et seulement le plus récent.";
+        };
+      }
+      return;
+    }
+    if (mode === "up" && !res.data.session) m.textContent = "Compte créé. Ouvrez l'e-mail « Confirmez votre adresse » dans l'heure qui suit (le plus récent s'il y en a plusieurs), puis connectez-vous.";
   };
 }
 
@@ -362,21 +395,57 @@ function exportJson() {
   const file = new File([data], name, { type: "application/json" });
   saveFile(file);
   try { localStorage.setItem(bkKey(), String(Date.now())); } catch (e) {}
-  const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  /* Chrome Android ne partage pas les fichiers .json : la copie à envoyer est la même sauvegarde, en .txt */
+  const copy = new File([data], name.replace(/\.json$/, ".txt"), { type: "text/plain" });
+  let canShare = false; try { canShare = !!(navigator.canShare && navigator.canShare({ files: [copy] })); } catch (e) {}
   dlgOpen(`<h2>Sauvegarde enregistrée</h2>
   <p class="mut">Le fichier ${esc(name)} est dans Téléchargements, sur ce téléphone. Si le téléphone est perdu, ce fichier l'est aussi : envoyez-vous une copie (Google Drive, e-mail ou WhatsApp à vous-même).</p>
   <p class="mut">Ce fichier contient vos clients et vos montants : ne l'envoyez à personne d'autre.</p>
+  ${canShare ? "" : '<p class="mut">Pour garder une copie en lieu sûr : ouvrez Google Drive, appuyez sur +, puis Importer, et choisissez ce fichier dans Téléchargements.</p>'}
   <div class="acts">${canShare ? '<button class="p" id="bsh">Envoyer une copie</button>' : ""}<button id="no">Fermer</button></div>`);
   $("#no").onclick = () => { dlgClose(); render(); };
-  if (canShare) $("#bsh").onclick = async () => { try { await navigator.share({ files: [file], title: name }); } catch (e) {} dlgClose(); render(); };
+  if (canShare) $("#bsh").onclick = async () => { try { await navigator.share({ files: [copy], title: name }); } catch (e) {} dlgClose(); render(); };
 }
+/* Import : fusionne sans doublons (client, facture ou paiement déjà présent = ignoré) et retient ce qui a été ajouté pour pouvoir l'annuler. */
+const impKey = () => "cc_last_import_" + (user ? user.id : "");
+function lastImport() { try { return JSON.parse(localStorage.getItem(impKey()) || "null"); } catch (e) { return null; } }
 function importData(o) {
-  const m = {};
-  (o.clients || []).forEach(c => { const id = uuid(); m[c.id] = id; S.clients.push({ id, name: String(c.name || "Sans nom").slice(0, 120), phone: String(c.phone || "").slice(0, 40), note: String(c.note || "").slice(0, 500), kind: c.kind === "fournisseur" ? "fournisseur" : "client" }); });
+  const m = {}, added = { clients: [], invoices: [], payments: [], at: Date.now() };
   const okDate = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d || "")) ? String(d) : "";
   const cleanItems = it => (Array.isArray(it) ? it : []).slice(0, 200).map(l => ({ d: String((l && l.d) || "").slice(0, 200), q: Number(l && l.q) || 0, p: Number(l && l.p) || 0 }));
-  (o.invoices || []).forEach(i => { if (m[i.cid]) S.invoices.push({ id: uuid(), cid: m[i.cid], no: String(i.no || "").slice(0, 40), date: okDate(i.date) || today(), due: okDate(i.due), items: cleanItems(i.items) }); });
-  (o.payments || []).forEach(p => { if (m[p.cid]) S.payments.push({ id: uuid(), cid: m[p.cid], date: okDate(p.date) || today(), amt: +p.amt || 0, method: String(p.method || "Espèces").slice(0, 40), note: String(p.note || "").slice(0, 500) }); });
+  const ckey = c => (c.kind === "fournisseur" ? "f" : "c") + "|" + String(c.name || "").trim().toLowerCase() + "|" + String(c.phone || "").replace(/\D/g, "");
+  const have = {}; S.clients.forEach(c => { have[ckey(c)] = c.id; });
+  (o.clients || []).forEach(c => {
+    const nc = { name: String(c.name || "Sans nom").slice(0, 120), phone: String(c.phone || "").slice(0, 40), note: String(c.note || "").slice(0, 500), kind: c.kind === "fournisseur" ? "fournisseur" : "client" };
+    const k = ckey(nc);
+    if (have[k]) { m[c.id] = have[k]; return; }
+    const id = uuid(); m[c.id] = id; have[k] = id; S.clients.push(Object.assign({ id }, nc)); added.clients.push(id);
+  });
+  (o.invoices || []).forEach(i => {
+    const cid = m[i.cid]; if (!cid) return;
+    const no = String(i.no || "").slice(0, 40), date = okDate(i.date) || today();
+    if (S.invoices.some(x => x.cid === cid && x.no === no && x.date === date)) return;
+    const id = uuid(); S.invoices.push({ id, cid, no, date, due: okDate(i.due), items: cleanItems(i.items) }); added.invoices.push(id);
+  });
+  (o.payments || []).forEach(p => {
+    const cid = m[p.cid]; if (!cid) return;
+    const date = okDate(p.date) || today(), amt = +p.amt || 0, method = String(p.method || "Espèces").slice(0, 40);
+    if (S.payments.some(x => x.cid === cid && x.date === date && +x.amt === amt && x.method === method)) return;
+    const id = uuid(); S.payments.push({ id, cid, date, amt, method, note: String(p.note || "").slice(0, 500) }); added.payments.push(id);
+  });
+  if (added.clients.length + added.invoices.length + added.payments.length) { try { localStorage.setItem(impKey(), JSON.stringify(added)); } catch (e) {} }
+  return added;
+}
+function undoImport() {
+  const li = lastImport(); if (!li) return;
+  const n = li.clients.length + li.invoices.length + li.payments.length;
+  if (!confirm("Annuler le dernier import ? " + n + " élément(s) ajouté(s) par cet import seront supprimés. Vos autres données ne changent pas.")) return;
+  const del = (col, ids) => { S[col] = S[col].filter(x => ids.indexOf(x.id) < 0); };
+  del("payments", li.payments); del("invoices", li.invoices);
+  /* un client importé n'est retiré que s'il ne porte plus aucune facture ni aucun paiement ajouté depuis */
+  S.clients = S.clients.filter(c => li.clients.indexOf(c.id) < 0 || S.invoices.some(i => i.cid === c.id) || S.payments.some(p => p.cid === c.id));
+  try { localStorage.removeItem(impKey()); } catch (e) {}
+  dlgClose(); render(); save();
 }
 function settings() {
   const si = subInfo();
@@ -384,19 +453,21 @@ function settings() {
   <p class="mut">${esc(user.email)}${si.text ? "<br>" + esc(si.text) : ""}</p>
   <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" value="${esc(S.shop)}">
   <label for="s2">Devise (lettres seulement, par exemple GNF)</label><input id="s2" value="${esc(S.cur)}" placeholder="GNF" maxlength="8">
-  <p class="mut">Sauvegarde : appuyez sur « Exporter » chaque semaine et envoyez-vous une copie (Drive, e-mail). Pour la restaurer sur un compte vide : « Importer ».</p>
-  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Exporter</button><button id="im">Importer</button>${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
-  <input type="file" id="fl" accept=".json" hidden>`);
+  <p class="mut">Sauvegarde : appuyez sur « Sauvegarder mes données » chaque semaine et envoyez-vous une copie (Drive, e-mail). Pour la restaurer sur un compte vide : « Importer ».</p>
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Sauvegarder mes données</button><button id="im">Importer</button>${lastImport() ? '<button id="ui">Annuler le dernier import</button>' : ""}${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
+  <input type="file" id="fl" accept=".json,.txt,application/json,text/plain" hidden>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = () => { S.shop = $("#s1").value.trim(); S.cur = cleanCur($("#s2").value); dlgClose(); render(); save(); };
   $("#ex").onclick = exportJson;
   $("#im").onclick = () => $("#fl").click();
+  on("#ui", undoImport);
   $("#fl").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     const r = new FileReader();
     r.onload = () => { try { const o = JSON.parse(r.result); if (!o || !Array.isArray(o.clients)) throw 0;
-      if (S.clients.length && !confirm("Importer ajoute les données du fichier à celles déjà présentes : si ce sont les mêmes, elles apparaîtront en double. Continuer ?")) { e.target.value = ""; return; }
-      importData(o); dlgClose(); render(); save(); } catch (x) { alert("Fichier invalide."); } };
+      if (S.clients.length && !confirm("Importer ajoute à votre compte ce qui manque dans le fichier choisi. Ce qui existe déjà est ignoré, rien n'est effacé. Continuer ?")) { e.target.value = ""; return; }
+      const ad = importData(o); dlgClose(); render(); save();
+      alert("Import terminé : " + ad.clients.length + " client(s), " + ad.invoices.length + " facture(s) et " + ad.payments.length + " paiement(s) ajoutés. Ce qui existait déjà a été ignoré. En cas d'erreur : Réglages, puis « Annuler le dernier import »."); } catch (x) { alert("Fichier invalide."); } };
     r.readAsText(f);
   };
   $("#lo").onclick = () => { dlgClose(); sb.auth.signOut(); };
@@ -513,6 +584,7 @@ async function pageKit() {
       words.forEach(function (w) { const test = cur ? cur + " " + w : w; if (g.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; } else cur = test; });
       if (cur) lines.push(cur); return lines.length ? lines : [""];
     },
+    mw: function (text, size, bold) { font(size, bold); return g.measureText(String(text)).width; },
     hr: function (color, w) { g.strokeStyle = color || "#bbb"; g.lineWidth = w || 2; g.beginPath(); g.moveTo(M, y); g.lineTo(W - M, y); g.stroke(); },
     box: function (x, yy, ww, hh, color) { g.fillStyle = color; g.fillRect(x, yy, ww, hh); },
     finish: function () {
@@ -547,19 +619,30 @@ async function invoicePdf(i, c) {
   });
   if (c.phone) { k.t(c.phone, M, k.y, { size: 22, color: "#444" }); k.y += 34; }
   k.y += 12; k.hr("#0f4c45", 3); k.y += 38;
-  k.t("Article", M, k.y, { size: 22, bold: true }); k.t("Qté", 470, k.y, { size: 22, bold: true, align: "right" }); k.t("Prix unitaire", 650, k.y, { size: 22, bold: true, align: "right" }); k.t("Montant", R, k.y, { size: 22, bold: true, align: "right" });
+  /* Colonnes calculées selon la largeur réelle des montants : écart régulier, jamais de chevauchement. */
+  const GAP = 34, colW = function (head, vals, sz) { return Math.max(k.mw(head, 22, true), ...vals.map(function (v) { return k.mw(v, sz, false); })); };
+  let sz = 24, wQ, wP, wA, xP, xQ, artW;
+  const lay = function () {
+    wA = colW("Montant", i.items.map(function (l) { return fmt(l.q * l.p); }), sz);
+    wP = colW("Prix unitaire", i.items.map(function (l) { return fmt(l.p); }), sz);
+    wQ = colW("Qté", i.items.map(function (l) { return String(l.q); }), sz);
+    xP = R - wA - GAP; xQ = xP - wP - GAP; artW = xQ - wQ - GAP - M;
+  };
+  lay(); if (artW < 180) { sz = 20; lay(); }
+  k.t("Article", M, k.y, { size: 22, bold: true }); k.t("Qté", xQ, k.y, { size: 22, bold: true, align: "right" }); k.t("Prix unitaire", xP, k.y, { size: 22, bold: true, align: "right" }); k.t("Montant", R, k.y, { size: 22, bold: true, align: "right" });
   k.y += 14; k.hr(); k.y += 36;
   i.items.forEach(function (l) {
-    const lines = k.wrap(l.d, 340, 24, false); k.need(lines.length * 32 + 20);
-    lines.forEach(function (ln, n) { k.t(ln, hasAr(ln) ? M + 340 : M, k.y + n * 32, { size: 24, align: hasAr(ln) ? "right" : "left" }); });
-    k.t(String(l.q), 470, k.y, { size: 24, align: "right" }); k.t(fmt(l.p), 650, k.y, { size: 24, align: "right" }); k.t(fmt(l.q * l.p), R, k.y, { size: 24, align: "right" });
+    const lines = k.wrap(l.d, artW, sz, false); k.need(lines.length * 32 + 20);
+    lines.forEach(function (ln, n) { k.t(ln, hasAr(ln) ? M + artW : M, k.y + n * 32, { size: sz, align: hasAr(ln) ? "right" : "left" }); });
+    k.t(String(l.q), xQ, k.y, { size: sz, align: "right" }); k.t(fmt(l.p), xP, k.y, { size: sz, align: "right" }); k.t(fmt(l.q * l.p), R, k.y, { size: sz, align: "right" });
     k.y += lines.length * 32 + 14;
   });
   k.need(220); k.hr(); k.y += 44;
-  k.t("Total", 560, k.y, { size: 28, bold: true, align: "right" }); k.t(fmt(i.total), R, k.y, { size: 28, bold: true, align: "right" });
-  k.y += 42; k.t("Payé", 560, k.y, { size: 24, align: "right" }); k.t(fmt(i.paid), R, k.y, { size: 24, align: "right" });
-  k.y += 52; k.box(M + 300, k.y - 38, k.W - 2 * M - 300, 58, "#e3efe9");
-  k.t("Reste à payer", 560, k.y, { size: 26, bold: true, color: "#0f4c45", align: "right" }); k.t(fmt(i.rest), R - 10, k.y, { size: 28, bold: true, color: "#0f4c45", align: "right" });
+  const xL = Math.min(560, R - GAP - Math.max(k.mw(fmt(i.total), 28, true), k.mw(fmt(i.rest), 28, true) + 10, k.mw(fmt(i.paid), 24, false)));
+  k.t("Total", xL, k.y, { size: 28, bold: true, align: "right" }); k.t(fmt(i.total), R, k.y, { size: 28, bold: true, align: "right" });
+  k.y += 42; k.t("Payé", xL, k.y, { size: 24, align: "right" }); k.t(fmt(i.paid), R, k.y, { size: 24, align: "right" });
+  k.y += 52; const bx = Math.min(M + 300, xL - k.mw("Reste à payer", 26, true) - 30); k.box(bx, k.y - 38, R - bx, 58, "#e3efe9");
+  k.t("Reste à payer", xL, k.y, { size: 26, bold: true, color: "#0f4c45", align: "right" }); k.t(fmt(i.rest), R - 10, k.y, { size: 28, bold: true, color: "#0f4c45", align: "right" });
   k.y += 56; k.t("Statut : " + i.st[0], M, k.y, { size: 22, color: "#444" });
   return k.finish();
 }
