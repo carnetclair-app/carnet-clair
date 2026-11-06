@@ -2,9 +2,11 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<!-- Liste blanche : sites que l'application a le droit de contacter (relecture de sécurité, étape 4). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://mphphohljjpqjwnrpuld.supabase.co wss://mphphohljjpqjwnrpuld.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
-<meta name="carnet-clair-version" content="2026-11-02">
+<meta name="carnet-clair-version" content="2026-11-06">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -65,8 +67,8 @@ td:last-child,th:last-child{text-align:right}
 <body>
 <main id="app"><p class="mut">Chargement…</p></main>
 <dialog id="dlg"></dialog>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" integrity="sha384-GFr3yTh5lJznCbZfpTtXnwboFsxqtTQoeTZCRHhE0579KrRmlCzen5AA8ohaB5ug" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js" integrity="sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk" crossorigin="anonymous"></script>
 <script>
 "use strict";
 /* ====== CONFIGURATION : remplacez ces deux lignes (voir GUIDE.md) ====== */
@@ -299,13 +301,19 @@ function clientForm(id, kind) {
   const c = id ? S.clients.find(c => c.id === id) : { name: "", phone: "", note: "" };
   const sup = (id ? c.kind : kind) === "fournisseur";
   dlgOpen(`<h2>${id ? (sup ? "Modifier le fournisseur" : "Modifier le client") : (sup ? "Nouveau fournisseur" : "Nouveau client")}</h2>
-  <label for="f1">Nom</label><input id="f1" value="${esc(c.name)}">
-  <label for="f2">Téléphone (avec indicatif, ex. 224...)</label><input id="f2" inputmode="tel" value="${esc(c.phone)}">
-  <label for="f3">Note</label><input id="f3" value="${esc(c.note)}">
+  <label for="f1">Nom</label><input id="f1" maxlength="120" value="${esc(c.name)}">
+  <label for="f2">Téléphone (avec indicatif, ex. 224...)</label><input id="f2" inputmode="tel" maxlength="40" value="${esc(c.phone)}">
+  <label for="f3">Note</label><input id="f3" maxlength="500" value="${esc(c.note)}">
   <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button>${id ? '<button class="d" id="del">Supprimer</button>' : ""}</div>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = () => {
+    if ($("#ok").disabled) return;
     const n = $("#f1").value.trim(); if (!n) { $("#f1").focus(); return; }
+    if (!id) {
+      const same = S.clients.find(x => (x.kind || "client") === (kind || "client") && x.name.trim().toLowerCase() === n.toLowerCase());
+      if (same && !confirm("« " + same.name + " » existe déjà dans votre liste. Créer quand même une deuxième fiche ?")) { dlgClose(); cid = same.id; render(); return; }
+    }
+    $("#ok").disabled = true;
     if (id) { c.name = n; c.phone = $("#f2").value.trim(); c.note = $("#f3").value.trim(); }
     else { const nc = { id: uuid(), name: n, phone: $("#f2").value.trim(), note: $("#f3").value.trim(), kind: kind || "client" }; S.clients.push(nc); cid = nc.id; }
     dlgClose(); render(); save();
@@ -317,7 +325,7 @@ function clientForm(id, kind) {
     }
   };
 }
-const lineRow = l => `<div class="ln"><input placeholder="Article" aria-label="Article" value="${esc(l.d)}"><input type="number" inputmode="decimal" min="0" placeholder="Qté" aria-label="Quantité" value="${Number(l.q) || ""}"><input type="number" inputmode="decimal" min="0" placeholder="Prix unitaire" aria-label="Prix unitaire" value="${Number(l.p) || ""}"></div>`;
+const lineRow = l => `<div class="ln"><input placeholder="Article" aria-label="Article" maxlength="200" value="${esc(l.d)}"><input type="number" inputmode="decimal" min="0" placeholder="Qté" aria-label="Quantité" value="${Number(l.q) || ""}"><input type="number" inputmode="decimal" min="0" placeholder="Prix unitaire" aria-label="Prix unitaire" value="${Number(l.p) || ""}"></div>`;
 function invForm(id) {
   const ex = id ? S.invoices.find(x => x.id === id) : null, sup = curKind() === "fournisseur";
   const d30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
@@ -330,12 +338,14 @@ function invForm(id) {
   <p class="amt" id="tt">Total : ${fmt(0)}</p>
   <div class="acts"><button class="p" id="ok">${ex ? "Enregistrer les modifications" : (sup ? "Enregistrer l'achat" : "Créer la facture")}</button><button id="no">Annuler</button></div>`);
   const sum = () => { let t = 0; document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"); t += (+i[1].value || 0) * (+i[2].value || 0); }); $("#tt").textContent = "Total : " + fmt(t); };
-  sum(); $("#ls").oninput = sum; $("#al").onclick = () => $("#ls").insertAdjacentHTML("beforeend", lineRow({ d: "", q: 1, p: "" })); $("#no").onclick = dlgClose;
+  sum(); $("#ls").oninput = sum; $("#al").onclick = () => { if (document.querySelectorAll("#ls .ln").length >= 200) { alert("200 lignes au maximum par facture."); return; } $("#ls").insertAdjacentHTML("beforeend", lineRow({ d: "", q: 1, p: "" })); }; $("#no").onclick = dlgClose;
   $("#ok").onclick = () => {
     const items = [];
     document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"), q = +i[1].value || 0, p = +i[2].value || 0; if (i[0].value.trim() && q > 0 && p > 0) items.push({ d: i[0].value.trim(), q, p }); });
     if (!items.length) { alert("Ajoutez au moins un article avec quantité et prix."); return; }
+    if ($("#ok").disabled) return; $("#ok").disabled = true;
     const date = $("#g1").value || today(), due = $("#g2").value;
+    if (due && due < date) { alert("L'échéance (" + fd(due) + ") est avant la date de la facture (" + fd(date) + "). Corrigez l'échéance : c'est la date limite de paiement, après la facture."); $("#ok").disabled = false; $("#g2").focus(); return; }
     if (ex) Object.assign(ex, { date, due, items });
     else S.invoices.push({ id: uuid(), cid, no: nextNo(curKind()), date, due, items });
     dlgClose(); render(); save();
@@ -351,7 +361,7 @@ function invView(id) {
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => invForm(id);
   const tel = (c.phone || "").replace(/\D/g, ""), fname = "facture-" + i.no + ".pdf";
   $("#dl").onclick = async () => { const d = await invoicePdf(i, c); if (d) saveFile(pdfFile(d, fname)); };
-  $("#iw").onclick = async () => { const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
+  $("#iw").onclick = async () => { if (!sendAgain("inv:" + i.id, (c.kind === "fournisseur" ? "Cet achat " : "Cette facture ") + i.no, tel)) return; const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
   $("#del").onclick = () => { if (confirm("Supprimer cette facture ?")) { S.invoices = S.invoices.filter(x => x.id !== id); dlgClose(); render(); save(); } };
 }
 function payForm(id) {
@@ -360,17 +370,18 @@ function payForm(id) {
   dlgOpen(`<h2>${id ? "Modifier le paiement" : (curKind() === "fournisseur" ? "Enregistrer un paiement" : "Encaisser un paiement")}</h2>
   <label for="h1">Montant (${esc(S.cur)})</label><input id="h1" type="number" inputmode="decimal" min="0" value="${p.amt}">
   <div class="two"><div><label for="h2">Date</label><input type="date" id="h2" value="${p.date}"></div><div><label for="h3">Mode</label><select id="h3">${ms}</select></div></div>
-  <label for="h4">Note</label><input id="h4" value="${esc(p.note)}">
-  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button>${id ? '<button id="rc">Reçu PDF</button><button class="d" id="del">Supprimer</button>' : ""}</div>`);
+  <label for="h4">Note</label><input id="h4" maxlength="500" value="${esc(p.note)}">
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button>${id ? '<button id="rc">📲 Reçu PDF / WhatsApp</button><button class="d" id="del">Supprimer</button>' : ""}</div>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = () => {
     const a = +$("#h1").value; if (!(a > 0)) { $("#h1").focus(); return; }
+    if ($("#ok").disabled) return; $("#ok").disabled = true;
     const o = { amt: a, date: $("#h2").value || today(), method: $("#h3").value, note: $("#h4").value.trim() };
     let pid = id;
     if (id) Object.assign(p, o); else { pid = uuid(); S.payments.push(Object.assign({ id: pid, cid }, o)); }
     dlgClose(); render(); save().then(function () { if (!id) showReceipt(pid); });
   };
-  if (id) $("#rc").onclick = () => showReceipt(id);
+  if (id) $("#rc").onclick = () => showReceipt(id, true);
   if (id) $("#del").onclick = () => { if (confirm("Supprimer ce paiement ?")) { S.payments = S.payments.filter(x => x.id !== id); dlgClose(); render(); save(); } };
 }
 function relance() {
@@ -451,7 +462,7 @@ function settings() {
   const si = subInfo();
   dlgOpen(`<h2>Réglages</h2>
   <p class="mut">${esc(user.email)}${si.text ? "<br>" + esc(si.text) : ""}</p>
-  <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" value="${esc(S.shop)}">
+  <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" maxlength="120" value="${esc(S.shop)}">
   <label for="s2">Devise (lettres seulement, par exemple GNF)</label><input id="s2" value="${esc(S.cur)}" placeholder="GNF" maxlength="8">
   <p class="mut">Sauvegarde : appuyez sur « Sauvegarder mes données » chaque semaine et envoyez-vous une copie (Drive, e-mail). Pour la restaurer sur un compte vide : « Importer ».</p>
   <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Sauvegarder mes données</button><button id="im">Importer</button>${lastImport() ? '<button id="ui">Annuler le dernier import</button>' : ""}${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
@@ -683,15 +694,31 @@ async function sharePdf(file, text, tel) {
   $("#no").onclick = dlgClose;
   $("#wo").onclick = () => { const a = document.createElement("a"); a.href = "https://wa.me/" + (tel || "") + "?text=" + encodeURIComponent(text); a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); };
 }
-function showReceipt(pid) {
+/* Envois WhatsApp déjà faits (retenus sur ce téléphone) : alerte avant un nouvel envoi du même document. */
+const sentKey = () => "cc_sent_" + (user ? user.id : "");
+function sentLog() { try { return JSON.parse(localStorage.getItem(sentKey()) || "{}"); } catch (e) { return {}; } }
+function sendAgain(key, label, tel) {
+  const log = sentLog(), l = log[key] || [];
+  if (l.length) {
+    const last = l[l.length - 1], d = new Date(last.t);
+    const when = fd(d.toISOString().slice(0, 10)) + " à " + String(d.getHours()).padStart(2, "0") + "h" + String(d.getMinutes()).padStart(2, "0");
+    const same = (last.tel || "") === (tel || "");
+    if (!confirm(label + " a déjà été envoyé" + (l.length > 1 ? " " + l.length + " fois" : "") + " (dernier envoi le " + when + (last.tel ? ", au " + last.tel : "") + ")." + (same ? " C'est le même numéro." : "") + " L'envoyer encore ?")) return false;
+  }
+  l.push({ t: Date.now(), tel: tel || "" }); log[key] = l.slice(-5);
+  const keys = Object.keys(log); if (keys.length > 800) keys.sort((a, b) => log[a][log[a].length - 1].t - log[b][log[b].length - 1].t).slice(0, keys.length - 800).forEach(k => delete log[k]);
+  try { localStorage.setItem(sentKey(), JSON.stringify(log)); } catch (e) {}
+  return true;
+}
+function showReceipt(pid, again) {
   const p = S.payments.find(x => x.id === pid); if (!p) return;
   const c = S.clients.find(x => x.id === p.cid); if (!c) return;
   const x = calc(c.id), tel = (c.phone || "").replace(/\D/g, ""), fname = "recu-" + p.date + "-" + p.id.slice(0, 6) + ".pdf";
-  dlgOpen(`<h2>Paiement enregistré</h2><p class="mut">${esc(c.name)} · ${fmt(p.amt)} · ${fd(p.date)}<br>Reste à payer : ${fmt(x.due)}</p>
+  dlgOpen(`<h2>${again ? "Reçu de paiement" : "Paiement enregistré"}</h2><p class="mut">${esc(c.name)} · ${fmt(p.amt)} · ${fd(p.date)}<br>Reste à payer : ${fmt(x.due)}</p>
   <div class="acts"><button class="p" id="rw">📲 Envoyer le reçu PDF sur WhatsApp</button><button id="rd">Télécharger le reçu PDF</button><button id="no">Fermer</button></div>`);
   $("#no").onclick = dlgClose;
   $("#rd").onclick = async () => { const d = await receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
-  $("#rw").onclick = async () => { const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
+  $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "Ce reçu de " + fmt(p.amt) + " du " + fd(p.date), tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
 }
 
 /* ---------- Mot de passe oublié / changement ---------- */
