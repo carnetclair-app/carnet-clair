@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://mphphohljjpqjwnrpuld.supabase.co wss://mphphohljjpqjwnrpuld.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
-<meta name="carnet-clair-version" content="2026-11-06">
+<meta name="carnet-clair-version" content="2026-11-10">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -41,6 +41,8 @@ label{display:block;font-size:14px;color:var(--mut);margin:10px 0 4px}
 .list{display:grid;gap:8px}
 .item{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;width:100%;text-align:left}
 .amt{font-weight:800;white-space:nowrap}
+.c-o,.mut.c-o{color:var(--o)}.c-r,.mut.c-r{color:var(--r)}.c-g{color:var(--g)}
+.row3 div.alert{background:var(--rt);color:var(--r)}.row3 div.plus{background:var(--gt);color:var(--g)}
 .tag{display:inline-block;font-size:12px;border-radius:99px;padding:2px 9px;font-weight:600}
 .ok{background:var(--gt);color:var(--g)}.wait{background:var(--ot);color:var(--o)}.late{background:var(--rt);color:var(--r)}
 .mut{color:var(--mut);font-size:14px}
@@ -50,6 +52,7 @@ dialog{border:1px solid var(--line);border-radius:16px;background:var(--bg);colo
 dialog::backdrop{background:rgba(0,0,0,.5)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .ln{display:grid;grid-template-columns:2fr 1fr 1.4fr;gap:6px;margin-bottom:6px}
+.ln input.miss{border-color:var(--r);box-shadow:0 0 0 2px var(--rt)}
 .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 table{width:100%;border-collapse:collapse;font-size:15px}
 td,th{padding:6px 4px;text-align:left;border-bottom:1px solid var(--line)}
@@ -236,14 +239,14 @@ function render() {
     if (S.invoices.length + S.payments.length > 0 && (days < 0 || days >= 7))
       h += `<div class="item" style="margin:0 0 12px;cursor:default"><span class="mut">${days < 0 ? "Aucune sauvegarde de vos données sur ce téléphone." : "Dernière sauvegarde il y a " + days + " jours."}</span><button id="bkx">Sauvegarder</button></div>`;
     h += `<div class="acts" style="margin:0 0 12px"><button id="tc" class="${sup ? "" : "p"}">Clients</button><button id="tf" class="${sup ? "p" : ""}">Fournisseurs</button></div>`;
-    h += `<div class="hero"><div class="hz"><small>${sup ? "Reste à payer à mes fournisseurs" : "Reste à encaisser"}</small><button class="hide" id="hm" aria-label="${hideAmt ? "Afficher les montants" : "Masquer les montants"}">${hideAmt ? "Afficher" : "Masquer"}</button></div><div class="big">${mfmt(t.d)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${mfmt(t.b)}</b></div><div>${sup ? "Payé" : "Encaissé"}<b>${mfmt(t.p)}</b></div><div>En retard<b>${mfmt(t.l)}</b></div></div></div>`;
+    h += `<div class="hero"><div class="hz"><small>${sup ? "Reste à payer à mes fournisseurs" : "Reste à encaisser"}</small><button class="hide" id="hm" aria-label="${hideAmt ? "Afficher les montants" : "Masquer les montants"}">${hideAmt ? "Afficher" : "Masquer"}</button></div><div class="big">${mfmt(t.d)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${mfmt(t.b)}</b></div><div>${sup ? "Payé" : "Encaissé"}<b>${mfmt(t.p)}</b></div><div class="${t.l > 0 ? "alert" : ""}">En retard<b>${mfmt(t.l)}</b></div></div></div>`;
     h += `<div class="bar"><button class="p" id="nc">${sup ? "Nouveau fournisseur" : "Nouveau client"}</button></div>`;
     if (!list.length) h += `<div class="empty">${sup ? "Aucun fournisseur. Ajoutez un fournisseur, puis notez vos achats et vos paiements." : "Aucun client. Ajoutez votre premier client, puis créez sa première facture."}</div>`;
     else {
       h += `<div class="list">`;
       list.slice().sort((a, b) => calc(b.id).due - calc(a.id).due).forEach(c => {
         const x = calc(c.id);
-        h += `<button class="item" data-c="${c.id}"><span><b>${esc(c.name)}</b><br><span class="mut">${x.inv.length} ${sup ? "achat(s)" : "facture(s)"}${x.late ? ' · <span class="tag late">En retard</span>' : ""}</span></span><span class="amt">${x.due ? mfmt(x.due) : '<span class="tag ok">À jour</span>'}</span></button>`;
+        h += `<button class="item" data-c="${c.id}"><span><b>${esc(c.name)}</b><br><span class="mut">${x.inv.length} ${sup ? "achat(s)" : "facture(s)"}${x.late ? ' · <span class="tag late">En retard</span>' : ""}</span></span><span class="amt ${x.late ? "c-r" : x.due ? "c-o" : ""}">${x.due ? mfmt(x.due) : '<span class="tag ok">À jour</span>'}</span></button>`;
       });
       h += `</div>`;
     }
@@ -252,14 +255,14 @@ function render() {
     const x = calc(cid), sup = c.kind === "fournisseur";
     h += `<div class="top"><button id="back">Retour</button><button id="ec">Modifier</button></div>${banner}`;
     h += `<h1>${esc(c.name)}</h1><div class="mut">${esc(c.phone || "Pas de téléphone")}${c.note ? " · " + esc(c.note) : ""}</div>`;
-    h += `<div class="hero" style="margin-top:12px"><small>${sup ? "Reste à payer au fournisseur" : "Reste à payer"}</small><div class="big">${fmt(x.due)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${fmt(x.billed)}</b></div><div>Payé<b>${fmt(x.paid)}</b></div><div>${x.credit ? "Avance" : "En retard"}<b>${fmt(x.credit || x.late)}</b></div></div></div>`;
+    h += `<div class="hero" style="margin-top:12px"><small>${sup ? "Reste à payer au fournisseur" : "Reste à payer"}</small><div class="big">${fmt(x.due)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${fmt(x.billed)}</b></div><div>Payé<b>${fmt(x.paid)}</b></div><div class="${x.credit ? "plus" : x.late > 0 ? "alert" : ""}">${x.credit ? "Avance" : "En retard"}<b>${fmt(x.credit || x.late)}</b></div></div></div>`;
     h += `<div class="acts" style="margin-top:0"><button class="p" id="ni">${sup ? "Nouvel achat" : "Nouvelle facture"}</button><button id="np">${sup ? "Enregistrer un paiement" : "Encaisser un paiement"}</button>${x.due && !sup ? '<button id="rl">Relancer</button>' : ""}<button id="sh">Partager le relevé</button></div>`;
     h += `<div class="sec"><h2>${sup ? "Achats" : "Factures"}</h2></div>`;
     if (!x.inv.length) h += `<div class="empty">${sup ? "Aucun achat noté." : "Aucune facture pour ce client."}</div>`;
     else {
       h += `<div class="list">`;
       x.inv.slice().reverse().forEach(i => {
-        h += `<button class="item" data-i="${i.id}"><span><b>${esc(i.no)}</b> <span class="tag ${i.st[1]}">${i.st[0]}</span><br><span class="mut">${fd(i.date)}${i.due ? " · échéance " + fd(i.due) : ""}</span></span><span class="amt">${fmt(i.total)}${i.rest && i.paid ? `<br><span class="mut">reste ${fmt(i.rest)}</span>` : ""}</span></button>`;
+        h += `<button class="item" data-i="${i.id}"><span><b>${esc(i.no)}</b> <span class="tag ${i.st[1]}">${i.st[0]}</span><br><span class="mut">${fd(i.date)}${i.due ? " · échéance " + fd(i.due) : ""}</span></span><span class="amt">${fmt(i.total)}${i.rest && i.paid ? `<br><span class="mut ${i.st[1] === "late" ? "c-r" : "c-o"}">reste ${fmt(i.rest)}</span>` : ""}</span></button>`;
       });
       h += `</div>`;
     }
@@ -268,7 +271,7 @@ function render() {
     if (!ps.length) h += `<div class="empty">Aucun paiement enregistré.</div>`;
     else {
       h += `<div class="list">`;
-      ps.forEach(p => { h += `<button class="item" data-p="${p.id}"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}${p.note ? " · " + esc(p.note) : ""}</span></span><span class="amt">${fmt(p.amt)}</span></button>`; });
+      ps.forEach(p => { h += `<button class="item" data-p="${p.id}"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}${p.note ? " · " + esc(p.note) : ""}</span></span><span class="amt c-g">${fmt(p.amt)}</span></button>`; });
       h += `</div>`;
     }
     h += `<p class="mut">Les paiements sont rattachés automatiquement aux factures les plus anciennes.</p>`;
@@ -281,7 +284,7 @@ function bind() {
   on("#ni", () => invForm()); on("#np", () => payForm()); on("#rl", relance); on("#sh", shareStatement); on("#bk", settings); on("#bkx", exportJson);
   document.querySelectorAll("[data-c]").forEach(b => { b.onclick = () => { cid = b.dataset.c; render(); window.scrollTo(0, 0); }; });
   document.querySelectorAll("[data-i]").forEach(b => { b.onclick = () => invView(b.dataset.i); });
-  document.querySelectorAll("[data-p]").forEach(b => { b.onclick = () => payForm(b.dataset.p); });
+  document.querySelectorAll("[data-p]").forEach(b => { b.onclick = () => payView(b.dataset.p); });
 }
 function dlgOpen(h) { const d = $("#dlg"); d.innerHTML = h; addEyes(d); if (!d.open) d.showModal(); return d; }
 function addEyes(root) {
@@ -334,11 +337,17 @@ function invForm(id) {
   dlgOpen(`<h2>${title}</h2>
   <div class="two"><div><label for="g1">Date</label><input type="date" id="g1" value="${ex ? ex.date : today()}"></div><div><label for="g2">Échéance</label><input type="date" id="g2" value="${ex ? (ex.due || "") : d30}"></div></div>
   <label>Articles</label><div id="ls">${lines}</div><button id="al">Ajouter une ligne</button>
+  <p class="c-o" id="alm" role="alert" style="display:none;margin:6px 0 0;font-size:14px">Remplissez d'abord la dernière ligne : article, quantité et prix.</p>
   <p class="mut">Pour retirer une ligne, videz son article ou mettez sa quantité à 0.</p>
   <p class="amt" id="tt">Total : ${fmt(0)}</p>
   <div class="acts"><button class="p" id="ok">${ex ? "Enregistrer les modifications" : (sup ? "Enregistrer l'achat" : "Créer la facture")}</button><button id="no">Annuler</button></div>`);
   const sum = () => { let t = 0; document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"); t += (+i[1].value || 0) * (+i[2].value || 0); }); $("#tt").textContent = "Total : " + fmt(t); };
-  sum(); $("#ls").oninput = sum; $("#al").onclick = () => { if (document.querySelectorAll("#ls .ln").length >= 200) { alert("200 lignes au maximum par facture."); return; } $("#ls").insertAdjacentHTML("beforeend", lineRow({ d: "", q: 1, p: "" })); }; $("#no").onclick = dlgClose;
+  sum(); $("#ls").oninput = e => { sum(); if (e.target.classList) e.target.classList.remove("miss"); if (!document.querySelector("#ls .miss")) $("#alm").style.display = "none"; };
+  /* Une nouvelle ligne seulement quand la dernière est complète (article, quantité > 0, prix > 0). */
+  $("#al").onclick = () => { const rows = document.querySelectorAll("#ls .ln"); if (rows.length >= 200) { alert("200 lignes au maximum par facture."); return; }
+    const last = rows[rows.length - 1]; if (last) { const i = last.querySelectorAll("input"), miss = [!i[0].value.trim(), !(+i[1].value > 0), !(+i[2].value > 0)];
+      if (miss.some(Boolean)) { i.forEach((el, k) => el.classList.toggle("miss", miss[k])); $("#alm").style.display = "block"; i[miss.indexOf(true)].focus(); return; } }
+    $("#alm").style.display = "none"; $("#ls").insertAdjacentHTML("beforeend", lineRow({ d: "", q: 1, p: "" })); $("#ls .ln:last-child input").focus(); }; $("#no").onclick = dlgClose;
   $("#ok").onclick = () => {
     const items = [];
     document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"), q = +i[1].value || 0, p = +i[2].value || 0; if (i[0].value.trim() && q > 0 && p > 0) items.push({ d: i[0].value.trim(), q, p }); });
@@ -356,7 +365,7 @@ function invView(id) {
   const rows = i.items.map(l => `<tr><td>${esc(l.d)}</td><td>${l.q} × ${fmt(l.p)}</td><td>${fmt(l.q * l.p)}</td></tr>`).join("");
   dlgOpen(`<div id="inv"><h2>${curKind() === "fournisseur" ? "Achat" : "Facture"} ${esc(i.no)}</h2><p class="mut">${esc(S.shop)}<br>${curKind() === "fournisseur" ? "Fournisseur" : "Client"} : ${esc(c.name)}<br>Date : ${fd(i.date)}${i.due ? " · Échéance : " + fd(i.due) : ""}</p>
   <div class="wrap"><table><tr><th>Article</th><th>Détail</th><th>Montant</th></tr>${rows}</table></div>
-  <p class="amt">Total : ${fmt(i.total)}<br>Payé : ${fmt(i.paid)}<br>Reste : ${fmt(i.rest)} <span class="tag ${i.st[1]}">${i.st[0]}</span></p></div>
+  <p class="amt">Total : ${fmt(i.total)}<br>Payé : ${fmt(i.paid)}<br>Reste : <span class="${!i.rest ? "" : i.st[1] === "late" ? "c-r" : "c-o"}">${fmt(i.rest)}</span> <span class="tag ${i.st[1]}">${i.st[0]}</span></p></div>
   <div class="acts"><button class="p" id="dl">Télécharger la facture PDF</button><button id="iw">📲 Envoyer la facture PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => invForm(id);
   const tel = (c.phone || "").replace(/\D/g, ""), fname = "facture-" + i.no + ".pdf";
@@ -371,8 +380,9 @@ function payForm(id) {
   <label for="h1">Montant (${esc(S.cur)})</label><input id="h1" type="number" inputmode="decimal" min="0" value="${p.amt}">
   <div class="two"><div><label for="h2">Date</label><input type="date" id="h2" value="${p.date}"></div><div><label for="h3">Mode</label><select id="h3">${ms}</select></div></div>
   <label for="h4">Note</label><input id="h4" maxlength="500" value="${esc(p.note)}">
-  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button>${id ? '<button id="rc">📲 Reçu PDF / WhatsApp</button><button class="d" id="del">Supprimer</button>' : ""}</div>`);
-  $("#no").onclick = dlgClose;
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="no">Annuler</button></div>`);
+  if (id) { const a = document.activeElement; if (a && a.blur) a.blur(); }
+  $("#no").onclick = () => id ? payView(id) : dlgClose();
   $("#ok").onclick = () => {
     const a = +$("#h1").value; if (!(a > 0)) { $("#h1").focus(); return; }
     if ($("#ok").disabled) return; $("#ok").disabled = true;
@@ -380,9 +390,22 @@ function payForm(id) {
     let pid = id;
     if (id) Object.assign(p, o); else { pid = uuid(); S.payments.push(Object.assign({ id: pid, cid }, o)); }
     dlgClose(); render(); save().then(function () { if (!id) showReceipt(pid); });
+    if (id) payView(id);
   };
-  if (id) $("#rc").onclick = () => showReceipt(id, true);
-  if (id) $("#del").onclick = () => { if (confirm("Supprimer ce paiement ?")) { S.payments = S.payments.filter(x => x.id !== id); dlgClose(); render(); save(); } };
+}
+/* Fiche d'un paiement : comme la fiche d'une facture (reçu PDF, WhatsApp, modifier, imprimer, supprimer), sans ouvrir le clavier. */
+function payView(id) {
+  const p = S.payments.find(x => x.id === id); if (!p) return;
+  const c = S.clients.find(x => x.id === p.cid); if (!c) return;
+  const sup = c.kind === "fournisseur", x = calc(c.id), tel = (c.phone || "").replace(/\D/g, ""), fname = "recu-" + p.date + "-" + p.id.slice(0, 6) + ".pdf";
+  dlgOpen(`<div id="inv"><h2>${sup ? "Paiement au fournisseur" : "Reçu de paiement"}</h2><p class="mut">${esc(S.shop)}<br>${sup ? "Fournisseur" : "Client"} : ${esc(c.name)}<br>Date : ${fd(p.date)} · Mode : ${esc(p.method)}${p.note ? "<br>Note : " + esc(p.note) : ""}</p>
+  <p class="amt">Montant payé : <span class="c-g">${fmt(p.amt)}</span><br>${sup ? "Reste à payer au fournisseur" : "Reste à payer"} : <span class="${x.late ? "c-r" : x.due ? "c-o" : ""}">${fmt(x.due)}</span></p></div>
+  <div class="acts"><button class="p" id="rd">Télécharger le reçu PDF</button><button id="rw">📲 Envoyer le reçu PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
+  const a = document.activeElement; if (a && a.blur) a.blur();
+  $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => payForm(id);
+  $("#rd").onclick = async () => { const d = await receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
+  $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "Ce reçu de " + fmt(p.amt) + " du " + fd(p.date), tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
+  $("#del").onclick = () => { if (confirm("Supprimer ce paiement ?")) { S.payments = S.payments.filter(y => y.id !== id); dlgClose(); render(); save(); } };
 }
 function relance() {
   const c = S.clients.find(c => c.id === cid), x = calc(cid), n = x.inv.filter(i => i.rest > 0).length;
@@ -494,11 +517,21 @@ async function adminView() {
   } catch (e) { return adminStepUp(); }
   const { data, error } = await sb.from("subscriptions").select("*").order("created_at", { ascending: false });
   if (error) { alert(error.message); return; }
+  /* Dernière utilisation et appareils (fonction admin_activity, réservée à l'administrateur avec code Authenticator). */
+  const act = {};
+  try { const a = await sb.rpc("admin_activity"); if (!a.error && Array.isArray(a.data)) a.data.forEach(r => { act[r.user_id] = r; }); } catch (e) {}
+  const when = ts => { if (!ts) return "jamais"; const d = new Date(ts), day = d.toISOString().slice(0, 10), y = new Date(Date.now() - 864e5).toISOString().slice(0, 10), h = String(d.getHours()).padStart(2, "0") + "h" + String(d.getMinutes()).padStart(2, "0");
+    return (day === today() ? "aujourd'hui" : day === y ? "hier" : "le " + fd(day)) + " à " + h; };
+  const me = user ? user.id : "";
   const rows = data.map(s => {
+    const a = act[s.user_id];
+    const al = a ? `<span class="mut">Dernière utilisation : ${when(a.last_use)} · ${a.devices ? `<span class="tag ${a.devices > 1 ? "wait" : "ok"}">${a.devices} appareil${a.devices > 1 ? "s" : ""}</span> ${esc(a.kinds || "")}` : "aucun appareil connecté"}</span>` : "";
+    const so = a && a.devices && s.user_id !== me ? `<button class="d" data-so="${s.user_id}">Déconnecter ses appareils</button>` : "";
     const t = Date.parse(s.trial_ends), p = s.paid_until ? Date.parse(s.paid_until) : 0, ok = Math.max(t, p) >= Date.now();
-    return `<div class="item" style="flex-direction:column;align-items:stretch"><b>${esc(s.email || s.user_id)}</b><span class="mut">Essai : ${fd(s.trial_ends.slice(0, 10))} · Payé : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"} <span class="tag ${ok ? "ok" : "late"}">${ok ? "Actif" : "Expiré"}</span></span><div class="acts" style="margin-top:8px"><button data-ex="${s.user_id}">+30 jours payés</button><button class="d" data-su="${s.user_id}">Suspendre</button></div></div>`;
+    return `<div class="item" style="flex-direction:column;align-items:stretch"><b>${esc(s.email || s.user_id)}</b><span class="mut">Essai : ${fd(s.trial_ends.slice(0, 10))} · Payé : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"} <span class="tag ${ok ? "ok" : "late"}">${ok ? "Actif" : "Expiré"}</span></span>${al}<div class="acts" style="margin-top:8px"><button data-ex="${s.user_id}">+30 jours payés</button><button class="d" data-su="${s.user_id}">Suspendre</button>${so}</div></div>`;
   }).join("");
   dlgOpen(`<h2>Abonnés (${data.length})</h2><div class="list" style="margin-top:10px">${rows || '<div class="empty">Aucun abonné.</div>'}</div><div class="acts"><button id="no">Fermer</button></div>`);
+  { const f = document.activeElement; if (f && f.blur) f.blur(); }
   $("#no").onclick = dlgClose;
   document.querySelectorAll("[data-ex]").forEach(b => { b.onclick = async () => {
     const s0 = data.find(x => x.user_id === b.dataset.ex);
@@ -506,6 +539,14 @@ async function adminView() {
     const s = s0, base = Math.max(Date.now(), s.paid_until ? Date.parse(s.paid_until) : 0);
     const r = await sb.from("subscriptions").update({ paid_until: new Date(base + 30 * 864e5).toISOString() }).eq("user_id", s.user_id);
     if (r.error) alert(r.error.message); adminView();
+  }; });
+  document.querySelectorAll("[data-so]").forEach(b => { b.onclick = async () => {
+    const s0 = data.find(x => x.user_id === b.dataset.so);
+    if (!confirm("Déconnecter tous les appareils de " + (s0.email || "cet abonné") + " ?\n\nIl devra se reconnecter avec son e-mail et son mot de passe. Un appareil ouvert en ce moment sera déconnecté au plus tard dans l'heure. Ses données ne sont pas touchées.")) return;
+    b.disabled = true;
+    const r = await sb.rpc("admin_signout_user", { target: s0.user_id });
+    alert(r.error ? "Échec : " + r.error.message : "Fait : " + r.data + " connexion(s) fermée(s).");
+    adminView();
   }; });
   document.querySelectorAll("[data-su]").forEach(b => { b.onclick = async () => {
     if (!confirm("Suspendre cet abonné ?")) return;
@@ -555,14 +596,14 @@ async function statementBoot(token) {
   const x = calc("x"), sup = data.kind === "fournisseur";
   let h = `<div id="inv"><div class="top"><h1>Relevé de compte</h1><button id="pr">Imprimer</button></div>
   <p class="mut">${esc(data.shop || "")}${data.shop ? "<br>" : ""}${sup ? "Fournisseur" : "Client"} : <b>${esc(data.name)}</b><br>Situation au ${fd(today())}</p>
-  <div class="hero"><small>${sup ? "Reste à payer par le commerçant" : "Reste à payer"}</small><div class="big">${fmt(x.due)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${fmt(x.billed)}</b></div><div>Payé<b>${fmt(x.paid)}</b></div><div>${x.credit ? "Avance" : "En retard"}<b>${fmt(x.credit || x.late)}</b></div></div></div>
+  <div class="hero"><small>${sup ? "Reste à payer par le commerçant" : "Reste à payer"}</small><div class="big">${fmt(x.due)}</div><div class="row3"><div>${sup ? "Acheté" : "Facturé"}<b>${fmt(x.billed)}</b></div><div>Payé<b>${fmt(x.paid)}</b></div><div class="${x.credit ? "plus" : x.late > 0 ? "alert" : ""}">${x.credit ? "Avance" : "En retard"}<b>${fmt(x.credit || x.late)}</b></div></div></div>
   <div class="sec"><h2>${sup ? "Achats" : "Factures"}</h2></div>`;
   if (!x.inv.length) h += '<div class="empty">Aucune facture.</div>';
-  else { h += '<div class="list">'; x.inv.slice().reverse().forEach(i => { h += `<div class="item"><span><b>${esc(i.no)}</b> <span class="tag ${i.st[1]}">${i.st[0]}</span><br><span class="mut">${fd(i.date)}${i.due ? " · échéance " + fd(i.due) : ""}</span></span><span class="amt">${fmt(i.total)}${i.rest && i.paid ? `<br><span class="mut">reste ${fmt(i.rest)}</span>` : ""}</span></div>`; }); h += "</div>"; }
+  else { h += '<div class="list">'; x.inv.slice().reverse().forEach(i => { h += `<div class="item"><span><b>${esc(i.no)}</b> <span class="tag ${i.st[1]}">${i.st[0]}</span><br><span class="mut">${fd(i.date)}${i.due ? " · échéance " + fd(i.due) : ""}</span></span><span class="amt">${fmt(i.total)}${i.rest && i.paid ? `<br><span class="mut ${i.st[1] === "late" ? "c-r" : "c-o"}">reste ${fmt(i.rest)}</span>` : ""}</span></div>`; }); h += "</div>"; }
   h += '<div class="sec"><h2>' + (sup ? "Paiements effectués" : "Paiements reçus") + '</h2></div>';
   const ps = S.payments.slice().sort((a, b) => a.date < b.date ? 1 : -1);
   if (!ps.length) h += '<div class="empty">Aucun paiement enregistré.</div>';
-  else { h += '<div class="list">'; ps.forEach(p => { h += `<div class="item"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}</span></span><span class="amt">${fmt(p.amt)}</span></div>`; }); h += "</div>"; }
+  else { h += '<div class="list">'; ps.forEach(p => { h += `<div class="item"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}</span></span><span class="amt c-g">${fmt(p.amt)}</span></div>`; }); h += "</div>"; }
   h += '<p class="mut">Ce relevé est personnel. Les paiements sont rattachés aux factures les plus anciennes. En cas de désaccord, contactez directement votre commerçant.</p></div>';
   app(h); $("#pr").onclick = () => window.print();
 }
