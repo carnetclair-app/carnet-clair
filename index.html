@@ -498,7 +498,9 @@ function settings() {
   $("#fl").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     const r = new FileReader();
-    r.onload = () => { try { const o = JSON.parse(r.result); if (!o || !Array.isArray(o.clients)) throw 0;
+    r.onload = () => { try { const o = JSON.parse(r.result);
+      if (o && o.type === "carnet-clair-sauvegarde-complete") { alert("Ce fichier est la sauvegarde complète de tous les commerçants. Il ne s'importe pas ici : utilisez Réglages, puis Administration, puis « Restaurer »."); e.target.value = ""; return; }
+      if (!o || !Array.isArray(o.clients)) throw 0;
       if (S.clients.length && !confirm("Importer ajoute à votre compte ce qui manque dans le fichier choisi. Ce qui existe déjà est ignoré, rien n'est effacé. Continuer ?")) { e.target.value = ""; return; }
       const ad = importData(o); dlgClose(); render(); save();
       alert("Import terminé : " + ad.clients.length + " client(s), " + ad.invoices.length + " facture(s) et " + ad.payments.length + " paiement(s) ajoutés. Ce qui existait déjà a été ignoré. En cas d'erreur : Réglages, puis « Annuler le dernier import »."); } catch (x) { alert("Fichier invalide."); } };
@@ -530,9 +532,13 @@ async function adminView() {
     const t = Date.parse(s.trial_ends), p = s.paid_until ? Date.parse(s.paid_until) : 0, ok = Math.max(t, p) >= Date.now();
     return `<div class="item" style="flex-direction:column;align-items:stretch"><b>${esc(s.email || s.user_id)}</b><span class="mut">Essai : ${fd(s.trial_ends.slice(0, 10))} · Payé : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"} <span class="tag ${ok ? "ok" : "late"}">${ok ? "Actif" : "Expiré"}</span></span>${al}<div class="acts" style="margin-top:8px"><button data-ex="${s.user_id}">+30 jours payés</button><button class="d" data-su="${s.user_id}">Suspendre</button>${so}</div></div>`;
   }).join("");
-  dlgOpen(`<h2>Abonnés (${data.length})</h2><div class="list" style="margin-top:10px">${rows || '<div class="empty">Aucun abonné.</div>'}</div><div class="acts"><button id="no">Fermer</button></div>`);
+  const fbAt = (() => { try { return +localStorage.getItem(fbKey()) || 0; } catch (e) { return 0; } })(), fbDays = fbAt ? Math.floor((Date.now() - fbAt) / 864e5) : -1;
+  const fbTxt = fbAt ? (fbDays === 0 ? "aujourd'hui" : "il y a " + fbDays + " jour" + (fbDays > 1 ? "s" : "")) : "jamais";
+  dlgOpen(`<h2>Abonnés (${data.length})</h2>
+  <div class="item" style="flex-direction:column;align-items:stretch;margin-top:10px"><b>Sauvegarde de toutes les données</b><span class="mut">Dernière sauvegarde complète sur ce téléphone : <span class="tag ${fbDays < 0 || fbDays > 7 ? "late" : "ok"}">${fbTxt}</span></span><div class="acts" style="margin-top:8px"><button class="p" id="fb">💾 Sauvegarde complète</button><button id="fr">Restaurer…</button></div></div>
+  <div class="list" style="margin-top:10px">${rows || '<div class="empty">Aucun abonné.</div>'}</div><div class="acts"><button id="no">Fermer</button></div>`);
   { const f = document.activeElement; if (f && f.blur) f.blur(); }
-  $("#no").onclick = dlgClose;
+  $("#no").onclick = dlgClose; $("#fb").onclick = fullBackup; $("#fr").onclick = fullRestore;
   document.querySelectorAll("[data-ex]").forEach(b => { b.onclick = async () => {
     const s0 = data.find(x => x.user_id === b.dataset.ex);
     if (!confirm("Ajouter 30 jours payés à " + (s0.email || "cet abonné") + " ?")) return;
@@ -553,6 +559,83 @@ async function adminView() {
     const r = await sb.from("subscriptions").update({ paid_until: null, trial_ends: new Date(Date.now() - 1000).toISOString() }).eq("user_id", b.dataset.su);
     if (r.error) alert(r.error.message); adminView();
   }; });
+}
+
+/* ---------- Sauvegarde complète (administrateur, code Authenticator de moins de 15 minutes exigé par la base) ---------- */
+const fbKey = () => "cc_last_fullbackup_" + (user ? user.id : "");
+function totpPrompt(msg) {
+  return new Promise(async resolve => {
+    let t = null;
+    try { const f = await sb.auth.mfa.listFactors(); t = f.data && f.data.totp && f.data.totp.find(x => x.status === "verified"); } catch (e) {}
+    if (!t) { alert("Code Authenticator introuvable. Vérifiez la connexion Internet."); resolve(false); return; }
+    dlgOpen(`<h2>Code Authenticator</h2><p class="mut">${esc(msg)}</p>
+    <label for="mv">Code à 6 chiffres</label><input id="mv" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+    <p class="mut" id="mm"></p>
+    <div class="acts"><button class="p" id="ok">Valider</button><button id="no">Annuler</button></div>`);
+    $("#no").onclick = () => resolve(false);
+    $("#ok").onclick = async () => {
+      const code = $("#mv").value.replace(/\D/g, ""), m = $("#mm");
+      if (code.length !== 6) { m.textContent = "Le code a 6 chiffres."; return; }
+      $("#ok").disabled = true; m.textContent = "Un instant…";
+      const err = await mfaVerify(t.id, code);
+      $("#ok").disabled = false;
+      if (err) { m.textContent = "Code refusé. Attendez le code suivant et réessayez."; $("#mv").value = ""; return; }
+      resolve(true);
+    };
+  });
+}
+async function adminRpc(fn, args) {
+  let r = await sb.rpc(fn, args);
+  if (r.error && /récent/.test(r.error.message || "")) {
+    if (!(await totpPrompt("Opération sensible : entrez le code « Carnet Clair » affiché maintenant dans Google Authenticator."))) return null;
+    r = await sb.rpc(fn, args);
+  }
+  return r;
+}
+async function fullBackup() {
+  const r = await adminRpc("admin_backup");
+  if (!r) { adminView(); return; }
+  if (r.error || !r.data) { alert("Échec de la sauvegarde : " + (r.error ? r.error.message : "réponse vide")); adminView(); return; }
+  const d = r.data, n = new Date(), stamp = today() + "-" + String(n.getHours()).padStart(2, "0") + "h" + String(n.getMinutes()).padStart(2, "0");
+  const name = "carnet-clair-sauvegarde-complete-" + stamp + ".json", len = k => (d[k] || []).length;
+  saveFile(new File([JSON.stringify(d)], name, { type: "application/json" }));
+  try { localStorage.setItem(fbKey(), String(Date.now())); } catch (e) {}
+  dlgOpen(`<h2>Sauvegarde complète enregistrée</h2>
+  <p class="mut">Le fichier ${esc(name)} est dans Téléchargements. Il contient ${len("users")} comptes, ${len("clients")} clients et fournisseurs, ${len("invoices")} factures et ${len("payments")} paiements.</p>
+  <p><b>Ce fichier contient les données de tous vos commerçants.</b></p>
+  <ol class="mut" style="padding-left:20px"><li>Mettez-le dans votre Google Drive : ouvrez Google Drive, touchez +, puis Importer, et choisissez ce fichier.</li><li>Ensuite, supprimez-le de vos Téléchargements.</li><li>Ne l'envoyez jamais par WhatsApp ni à quelqu'un d'autre.</li></ol>
+  <div class="acts"><button class="p" id="no">J'ai compris</button></div>`);
+  $("#no").onclick = adminView;
+}
+function fullRestore() {
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = ".json,.txt,application/json,text/plain";
+  inp.onchange = async () => {
+    const f = inp.files[0]; if (!f) return; let d;
+    try { d = JSON.parse(await f.text()); } catch (e) { alert("Ce fichier n'est pas une sauvegarde lisible."); return; }
+    if (!d || d.type !== "carnet-clair-sauvegarde-complete") { alert("Ce fichier n'est pas une sauvegarde complète Carnet Clair. La sauvegarde d'un seul commerçant se restaure depuis son propre compte, avec « Importer »."); return; }
+    const users = (d.users || []).filter(u => (d.clients || []).some(c => c.user_id === u.id));
+    const cnt = uid => ["clients", "invoices", "payments"].map(k => (d[k] || []).filter(x => !uid || x.user_id === uid).length);
+    const at = d.created_at ? new Date(d.created_at) : null;
+    dlgOpen(`<h2>Restaurer une sauvegarde</h2>
+    <p class="mut">${at ? "Sauvegarde du " + fd(at.toISOString().slice(0, 10)) + " à " + String(at.getHours()).padStart(2, "0") + "h" + String(at.getMinutes()).padStart(2, "0") + "." : ""}</p>
+    <label for="ru">Pour quel compte ?</label><select id="ru"><option value="">Tous les commerçants</option>${users.map(u => `<option value="${esc(u.id)}">${esc(u.email || u.id)}</option>`).join("")}</select>
+    <p class="mut" id="rc"></p>
+    <p class="mut">La restauration <b>ne remplace rien et ne supprime rien</b> : elle recrée seulement les clients, factures et paiements qui ont disparu depuis cette sauvegarde. Attention : ce que le commerçant a supprimé volontairement depuis sera recréé aussi.</p>
+    <div class="acts"><button class="p" id="ok">Restaurer</button><button id="no">Annuler</button></div>`);
+    const upd = () => { const c = cnt($("#ru").value); $("#rc").textContent = "Dans la sauvegarde : " + c[0] + " clients et fournisseurs, " + c[1] + " factures, " + c[2] + " paiements."; };
+    upd(); $("#ru").onchange = upd; $("#no").onclick = adminView;
+    $("#ok").onclick = async () => {
+      const uid = $("#ru").value || null, u = users.find(x => x.id === uid), who = u ? u.email : "tous les commerçants";
+      if (!confirm("Restaurer la sauvegarde pour " + who + " ?")) return;
+      $("#ok").disabled = true;
+      const part = uid ? Object.assign({}, d, { clients: d.clients.filter(x => x.user_id === uid), invoices: (d.invoices || []).filter(x => x.user_id === uid), payments: (d.payments || []).filter(x => x.user_id === uid) }) : d;
+      const r = await adminRpc("admin_restore", { data: part, only_user: uid });
+      if (!r) { adminView(); return; }
+      alert(r.error ? "Échec : " + r.error.message : "Restauration terminée. Recréés : " + r.data.clients + " clients et fournisseurs, " + r.data.invoices + " factures, " + r.data.payments + " paiements." + (r.data.clients + r.data.invoices + r.data.payments === 0 ? " Rien ne manquait." : ""));
+      adminView();
+    };
+  };
+  inp.click();
 }
 
 /* ---------- Relevé partagé avec le client ---------- */
