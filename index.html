@@ -128,10 +128,13 @@ const active = () => subInfo().ok;
 
 /* ---------- Calculs ---------- */
 function calc(id) {
-  const inv = S.invoices.filter(i => i.cid === id).sort((a, b) => a.date < b.date ? -1 : 1);
+  const byNo = (a, b) => String(a.no).localeCompare(String(b.no), "fr", { numeric: true });
+  const inv = S.invoices.filter(i => i.cid === id).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : byNo(a, b));
+  /* Les paiements soldent d'abord la facture dont l'échéance est la plus ancienne (sans échéance : sa date), puis par date, puis par numéro. */
+  const ord = inv.slice().sort((a, b) => { const ea = a.due || a.date, eb = b.due || b.date; return ea < eb ? -1 : ea > eb ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : byNo(a, b); });
   let pool = S.payments.filter(p => p.cid === id).reduce((a, p) => a + p.amt, 0);
   const paidAll = pool; let billed = 0, due = 0, late = 0;
-  inv.forEach(i => {
+  ord.forEach(i => {
     i.total = tot(i); i.paid = Math.min(i.total, pool); pool -= i.paid; i.rest = i.total - i.paid;
     const over = i.rest > 0 && i.due && i.due < today();
     i.st = i.rest === 0 ? ["Payée", "ok"] : over ? ["En retard", "late"] : i.paid > 0 ? ["Partielle", "wait"] : ["À payer", "wait"];
@@ -274,7 +277,7 @@ function render() {
       ps.forEach(p => { h += `<button class="item" data-p="${p.id}"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}${p.note ? " · " + esc(p.note) : ""}</span></span><span class="amt c-g">${fmt(p.amt)}</span></button>`; });
       h += `</div>`;
     }
-    h += `<p class="mut">Les paiements sont rattachés automatiquement aux factures les plus anciennes.</p>`;
+    h += `<p class="mut">Les paiements soldent d'abord la facture dont l'échéance est la plus proche ou déjà dépassée.</p>`;
   }
   app(h); bind();
 }
@@ -687,7 +690,7 @@ async function statementBoot(token) {
   const ps = S.payments.slice().sort((a, b) => a.date < b.date ? 1 : -1);
   if (!ps.length) h += '<div class="empty">Aucun paiement enregistré.</div>';
   else { h += '<div class="list">'; ps.forEach(p => { h += `<div class="item"><span><b>${fd(p.date)}</b><br><span class="mut">${esc(p.method)}</span></span><span class="amt c-g">${fmt(p.amt)}</span></div>`; }); h += "</div>"; }
-  h += '<p class="mut">Ce relevé est personnel. Les paiements sont rattachés aux factures les plus anciennes. En cas de désaccord, contactez directement votre commerçant.</p></div>';
+  h += '<p class="mut">Ce relevé est personnel. Les paiements soldent d\'abord la facture dont l\'échéance est la plus proche ou déjà dépassée. En cas de désaccord, contactez directement votre commerçant.</p></div>';
   app(h); $("#pr").onclick = () => window.print();
 }
 
