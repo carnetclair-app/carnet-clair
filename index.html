@@ -103,7 +103,7 @@ const authErr = msg => {
 };
 let hideAmt = false; try { hideAmt = localStorage.getItem("cc_hide_amounts") === "1"; } catch (e) {}
 const mfmt = n => hideAmt ? "•••••• " + S.cur : fmt(n);
-let S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" };
+let S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "", trash: { invoices: [], payments: [] }, counters: {} };
 let syn = { clients: {}, invoices: {}, payments: {} };
 const $ = s => document.querySelector(s);
 const app = h => { $("#app").innerHTML = h; addEyes($("#app")); };
@@ -143,16 +143,24 @@ function calc(id) {
   return { inv, billed, paid: paidAll, due, late, credit: pool };
 }
 function all(kind) { const t = { b: 0, p: 0, d: 0, l: 0 }; S.clients.filter(c => (c.kind || "client") === kind).forEach(c => { const x = calc(c.id); t.b += x.billed; t.p += x.paid; t.d += x.due; t.l += x.late; }); return t; }
-function nextNo(kind) { const p = (kind === "fournisseur" ? "A" : "F") + new Date().getFullYear() + "-"; let max = 0; S.invoices.forEach(i => { if (String(i.no).indexOf(p) === 0) { const n = parseInt(String(i.no).slice(p.length), 10); if (n > max) max = n; } }); return p + String(max + 1).padStart(3, "0"); }
+function nextNo(kind) { const y = (kind === "fournisseur" ? "A" : "F") + new Date().getFullYear(), p = y + "-"; let max = +((S.counters || {})[y]) || 0; allInv().forEach(i => { if (String(i.no).indexOf(p) === 0) { const n = parseInt(String(i.no).slice(p.length), 10); if (n > max) max = n; } }); return p + String(max + 1).padStart(3, "0"); }
 function curKind() { const c = S.clients.find(c => c.id === cid); return c && c.kind === "fournisseur" ? "fournisseur" : "client"; }
 
 /* ---------- Base de données ---------- */
 function row(col, o) {
   if (col === "clients") return { id: o.id, name: o.name, phone: o.phone || "", note: o.note || "", kind: o.kind || "client", share_token: o.share || null };
-  if (col === "invoices") return { id: o.id, client_id: o.cid, no: o.no, date: o.date, due: o.due || null, items: o.items };
-  return { id: o.id, client_id: o.cid, date: o.date, amt: o.amt, method: o.method, note: o.note || "" };
+  if (col === "invoices") return { id: o.id, client_id: o.cid, no: o.no, date: o.date, due: o.due || null, items: o.items, deleted_at: o.del || null };
+  return { id: o.id, client_id: o.cid, date: o.date, amt: o.amt, method: o.method, note: o.note || "", deleted_at: o.del || null };
 }
-function resetSyn() { ["clients", "invoices", "payments"].forEach(c => { syn[c] = {}; S[c].forEach(o => { syn[c][o.id] = JSON.stringify(row(c, o)); }); }); }
+/* Factures et paiements actifs + ceux de la corbeille (ils restent en base 30 jours, avec leur date de suppression). */
+const allOf = col => col === "clients" ? S.clients : S[col].concat((S.trash && S.trash[col]) || []);
+const allInv = () => allOf("invoices");
+function counters() {
+  const c = Object.assign({}, S.counters || {});
+  allInv().forEach(i => { const m = /^([FA]\d{4})-(\d+)$/.exec(String(i.no || "")); if (m && +m[2] > (+c[m[1]] || 0)) c[m[1]] = +m[2]; });
+  return c;
+}
+function resetSyn() { ["clients", "invoices", "payments"].forEach(c => { syn[c] = {}; allOf(c).forEach(o => { syn[c][o.id] = JSON.stringify(row(c, o)); }); }); }
 
 let queue = Promise.resolve();
 function save() { queue = queue.then(doSave).catch(e => { alert("Erreur d'enregistrement : " + (e.message || e)); return loadAll(false); }); return queue; }
@@ -160,15 +168,16 @@ async function doSave() {
   if (!active()) { alert("Abonnement expiré : lecture seule. Contactez le prestataire."); return loadAll(false); }
   for (const col of ["clients", "invoices", "payments"]) {
     const up = [];
-    S[col].forEach(o => { const r = row(col, o); if (syn[col][o.id] !== JSON.stringify(r)) up.push(r); });
+    allOf(col).forEach(o => { const r = row(col, o); if (syn[col][o.id] !== JSON.stringify(r)) up.push(r); });
     if (up.length) { const { error } = await sb.from(col).upsert(up); if (error) throw error; up.forEach(r => { syn[col][r.id] = JSON.stringify(r); }); }
   }
   for (const col of ["payments", "invoices", "clients"]) {
-    const del = Object.keys(syn[col]).filter(id => !S[col].some(o => o.id === id));
+    const del = Object.keys(syn[col]).filter(id => !allOf(col).some(o => o.id === id));
     if (del.length) { const { error } = await sb.from(col).delete().in("id", del); if (error) throw error; del.forEach(id => { delete syn[col][id]; }); }
   }
-  const c = JSON.stringify({ shop: S.shop, cur: S.cur });
-  if (c !== cfgS) { const { error } = await sb.from("profiles").upsert({ user_id: user.id, shop: S.shop, cur: S.cur }); if (error) throw error; cfgS = c; }
+  S.counters = counters();
+  const c = JSON.stringify({ shop: S.shop, cur: S.cur, counters: S.counters });
+  if (c !== cfgS) { const { error } = await sb.from("profiles").upsert({ user_id: user.id, shop: S.shop, cur: S.cur, counters: S.counters }); if (error) throw error; cfgS = c; }
 }
 
 async function loadAll(first) {
@@ -183,11 +192,17 @@ async function loadAll(first) {
   const err = r.find(x => x.error);
   if (err) { app(`<div class="empty">Erreur de chargement : ${esc(err.error.message)}</div><div class="acts"><button id="rt">Réessayer</button><button id="lo">Se déconnecter</button></div>`); $("#rt").onclick = () => loadAll(true); $("#lo").onclick = () => sb.auth.signOut(); return; }
   S.clients = r[0].data.map(x => ({ id: x.id, name: x.name, phone: x.phone, note: x.note, kind: x.kind || "client", share: x.share_token || null }));
-  S.invoices = r[1].data.map(x => ({ id: x.id, cid: x.client_id, no: x.no, date: x.date, due: x.due || "", items: x.items }));
-  S.payments = r[2].data.map(x => ({ id: x.id, cid: x.client_id, date: x.date, amt: Number(x.amt), method: x.method, note: x.note || "" }));
-  const p = r[3].data; S.shop = p ? p.shop : ""; S.cur = p ? cleanCur(p.cur) : "GNF"; cfgS = JSON.stringify({ shop: S.shop, cur: S.cur });
+  const invs = r[1].data.map(x => ({ id: x.id, cid: x.client_id, no: x.no, date: x.date, due: x.due || "", items: x.items, del: x.deleted_at || null }));
+  const pays = r[2].data.map(x => ({ id: x.id, cid: x.client_id, date: x.date, amt: Number(x.amt), method: x.method, note: x.note || "", del: x.deleted_at || null }));
+  S.invoices = invs.filter(x => !x.del); S.payments = pays.filter(x => !x.del);
+  S.trash = { invoices: invs.filter(x => x.del), payments: pays.filter(x => x.del) };
+  const p = r[3].data; S.shop = p ? p.shop : ""; S.cur = p ? cleanCur(p.cur) : "GNF";
+  S.counters = p && p.counters && typeof p.counters === "object" ? p.counters : {}; cfgS = JSON.stringify({ shop: S.shop, cur: S.cur, counters: S.counters });
   sub = r[4].data; isAdm = !!r[5].data;
   resetSyn(); render();
+  /* Corbeille : ce qui y est depuis plus de 30 jours est supprimé pour de bon. */
+  const lim = Date.now() - 30 * 864e5, old = x => Date.parse(x.del) < lim;
+  if (active() && (S.trash.invoices.some(old) || S.trash.payments.some(old))) { S.trash.invoices = S.trash.invoices.filter(x => !old(x)); S.trash.payments = S.trash.payments.filter(x => !old(x)); save(); }
 }
 
 /* ---------- Connexion ---------- */
@@ -327,6 +342,7 @@ function clientForm(id, kind) {
   if (id) $("#del").onclick = () => {
     if (confirm("Supprimer cette fiche avec ses factures et paiements ?")) {
       S.clients = S.clients.filter(c => c.id !== id); S.invoices = S.invoices.filter(i => i.cid !== id); S.payments = S.payments.filter(p => p.cid !== id);
+      S.trash.invoices = S.trash.invoices.filter(i => i.cid !== id); S.trash.payments = S.trash.payments.filter(p => p.cid !== id);
       cid = null; dlgClose(); render(); save();
     }
   };
@@ -374,7 +390,7 @@ function invView(id) {
   const tel = (c.phone || "").replace(/\D/g, ""), fname = "facture-" + i.no + ".pdf";
   $("#dl").onclick = async () => { const d = await invoicePdf(i, c); if (d) saveFile(pdfFile(d, fname)); };
   $("#iw").onclick = async () => { if (!sendAgain("inv:" + i.id, (c.kind === "fournisseur" ? "Cet achat " : "Cette facture ") + i.no, tel)) return; const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
-  $("#del").onclick = () => { if (confirm("Supprimer cette facture ?")) { S.invoices = S.invoices.filter(x => x.id !== id); dlgClose(); render(); save(); } };
+  $("#del").onclick = () => { if (confirm("Mettre cette facture à la corbeille ?\n\nVous pourrez la récupérer pendant 30 jours : Réglages, puis Corbeille.")) { toTrash("invoices", id); dlgClose(); render(); save(); } };
 }
 function payForm(id) {
   const p = id ? S.payments.find(p => p.id === id) : { amt: "", date: today(), method: "Espèces", note: "" };
@@ -408,7 +424,7 @@ function payView(id) {
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => payForm(id);
   $("#rd").onclick = async () => { const d = await receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
   $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "Ce reçu de " + fmt(p.amt) + " du " + fd(p.date), tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
-  $("#del").onclick = () => { if (confirm("Supprimer ce paiement ?")) { S.payments = S.payments.filter(y => y.id !== id); dlgClose(); render(); save(); } };
+  $("#del").onclick = () => { if (confirm("Mettre ce paiement à la corbeille ?\n\nVous pourrez le récupérer pendant 30 jours : Réglages, puis Corbeille.")) { toTrash("payments", id); dlgClose(); render(); save(); } };
 }
 function relance() {
   const c = S.clients.find(c => c.id === cid), x = calc(cid), n = x.inv.filter(i => i.rest > 0).length;
@@ -461,7 +477,7 @@ function importData(o) {
   (o.invoices || []).forEach(i => {
     const cid = m[i.cid]; if (!cid) return;
     const no = String(i.no || "").slice(0, 40), date = okDate(i.date) || today();
-    if (S.invoices.some(x => x.cid === cid && x.no === no && x.date === date)) return;
+    if (allInv().some(x => x.cid === cid && x.no === no && x.date === date)) return;
     const id = uuid(); S.invoices.push({ id, cid, no, date, due: okDate(i.due), items: cleanItems(i.items) }); added.invoices.push(id);
   });
   (o.payments || []).forEach(p => {
@@ -477,7 +493,7 @@ function undoImport() {
   const li = lastImport(); if (!li) return;
   const n = li.clients.length + li.invoices.length + li.payments.length;
   if (!confirm("Annuler le dernier import ? " + n + " élément(s) ajouté(s) par cet import seront supprimés. Vos autres données ne changent pas.")) return;
-  const del = (col, ids) => { S[col] = S[col].filter(x => ids.indexOf(x.id) < 0); };
+  const del = (col, ids) => { S[col] = S[col].filter(x => ids.indexOf(x.id) < 0); S.trash[col] = S.trash[col].filter(x => ids.indexOf(x.id) < 0); };
   del("payments", li.payments); del("invoices", li.invoices);
   /* un client importé n'est retiré que s'il ne porte plus aucune facture ni aucun paiement ajouté depuis */
   S.clients = S.clients.filter(c => li.clients.indexOf(c.id) < 0 || S.invoices.some(i => i.cid === c.id) || S.payments.some(p => p.cid === c.id));
@@ -491,13 +507,13 @@ function settings() {
   <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" maxlength="120" value="${esc(S.shop)}">
   <label for="s2">Devise (lettres seulement, par exemple GNF)</label><input id="s2" value="${esc(S.cur)}" placeholder="GNF" maxlength="8">
   <p class="mut">Sauvegarde : appuyez sur « Sauvegarder mes données » chaque semaine et envoyez-vous une copie (Drive, e-mail). Pour la restaurer sur un compte vide : « Importer ».</p>
-  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Sauvegarder mes données</button><button id="im">Importer</button>${lastImport() ? '<button id="ui">Annuler le dernier import</button>' : ""}${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Sauvegarder mes données</button><button id="im">Importer</button>${lastImport() ? '<button id="ui">Annuler le dernier import</button>' : ""}${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="tr">Corbeille${S.trash.invoices.length + S.trash.payments.length ? " (" + (S.trash.invoices.length + S.trash.payments.length) + ")" : ""}</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
   <input type="file" id="fl" accept=".json,.txt,application/json,text/plain" hidden>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = () => { S.shop = $("#s1").value.trim(); S.cur = cleanCur($("#s2").value); dlgClose(); render(); save(); };
   $("#ex").onclick = exportJson;
   $("#im").onclick = () => $("#fl").click();
-  on("#ui", undoImport);
+  on("#ui", undoImport); on("#tr", trashView);
   $("#fl").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     const r = new FileReader();
@@ -561,6 +577,28 @@ async function adminView() {
     if (!confirm("Suspendre cet abonné ?")) return;
     const r = await sb.from("subscriptions").update({ paid_until: null, trial_ends: new Date(Date.now() - 1000).toISOString() }).eq("user_id", b.dataset.su);
     if (r.error) alert(r.error.message); adminView();
+  }; });
+}
+
+/* ---------- Corbeille : 30 jours pour récupérer une facture ou un paiement ---------- */
+function toTrash(col, id) {
+  const o = S[col].find(x => x.id === id); if (!o) return;
+  S[col] = S[col].filter(x => x.id !== id); o.del = new Date().toISOString(); S.trash[col].push(o);
+}
+function trashView() {
+  const left = d => Math.max(0, 30 - Math.floor((Date.now() - Date.parse(d)) / 864e5));
+  const cname = id => { const c = S.clients.find(x => x.id === id); return c ? c.name : "?"; };
+  const items = S.trash.invoices.map(i => ({ col: "invoices", o: i, t: Date.parse(i.del), html: `<b>${S.clients.find(c => c.id === i.cid && c.kind === "fournisseur") ? "Achat" : "Facture"} ${esc(i.no)}</b> · ${fmt(tot(i))}<br><span class="mut">${esc(cname(i.cid))} · du ${fd(i.date)}</span>` }))
+    .concat(S.trash.payments.map(p => ({ col: "payments", o: p, t: Date.parse(p.del), html: `<b>Paiement · ${fmt(p.amt)}</b><br><span class="mut">${esc(cname(p.cid))} · du ${fd(p.date)} · ${esc(p.method)}</span>` })))
+    .sort((a, b) => b.t - a.t);
+  const rows = items.map((x, k) => `<div class="item" style="flex-direction:column;align-items:stretch"><span>${x.html}<br><span class="mut">Supprimé le ${fd(x.o.del.slice(0, 10))} · effacé définitivement dans ${left(x.o.del)} jour(s)</span></span><div class="acts" style="margin-top:8px"><button data-rs="${k}">Restaurer</button></div></div>`).join("");
+  dlgOpen(`<h2>Corbeille</h2><p class="mut">Les factures et paiements supprimés restent ici 30 jours, puis sont effacés pour de bon.</p>
+  <div class="list" style="margin-top:10px">${rows || '<div class="empty">La corbeille est vide.</div>'}</div><div class="acts"><button id="no">Fermer</button></div>`);
+  { const f = document.activeElement; if (f && f.blur) f.blur(); }
+  $("#no").onclick = dlgClose;
+  document.querySelectorAll("[data-rs]").forEach(b => { b.onclick = () => {
+    const x = items[+b.dataset.rs]; S.trash[x.col] = S.trash[x.col].filter(y => y.id !== x.o.id); delete x.o.del; S[x.col].push(x.o);
+    render(); save(); trashView();
   }; });
 }
 
@@ -1098,7 +1136,7 @@ function boot() {
         locked = ev === "INITIAL_SESSION" && !!getPin();
         loadAll(true);
       }
-      else { mfaPending = false; S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "" }; sub = null; isAdm = false; cid = null; renderAuth(); }
+      else { mfaPending = false; S = { clients: [], invoices: [], payments: [], cur: "GNF", shop: "", trash: { invoices: [], payments: [] }, counters: {} }; sub = null; isAdm = false; cid = null; renderAuth(); }
     }, 0);
   });
   document.addEventListener("visibilitychange", () => {
