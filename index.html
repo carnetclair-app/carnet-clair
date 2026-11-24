@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://mphphohljjpqjwnrpuld.supabase.co wss://mphphohljjpqjwnrpuld.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
-<meta name="carnet-clair-version" content="2026-11-10">
+<meta name="carnet-clair-version" content="2026-11-24">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -54,6 +54,9 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 .ln{display:grid;grid-template-columns:2fr 1fr 1.4fr;gap:6px;margin-bottom:6px}
 .ln input.miss{border-color:var(--r);box-shadow:0 0 0 2px var(--rt)}
 .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.tarifs{display:grid;gap:8px;margin:12px 0}.tarifs div{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}.tarifs span{font-weight:800;text-align:right}.tarifs small{display:block;font-weight:500;color:var(--mut);font-size:13px}.tarifs .best{border:2px solid var(--g)}.tarifs .best b:after{content:'★ meilleur prix';display:block;color:var(--g);font-size:12px;font-weight:600}
+.steps{margin:12px 0;padding-left:22px}.steps li{margin:8px 0}.steps button{min-height:34px;padding:4px 10px;margin-top:4px;font-size:14px}
+.total{background:var(--gt);color:var(--g);border-radius:12px;padding:10px 14px;margin:10px 0;font-weight:700}.total b{font-size:22px;display:block}
 table{width:100%;border-collapse:collapse;font-size:15px}
 td,th{padding:6px 4px;text-align:left;border-bottom:1px solid var(--line)}
 td:last-child,th:last-child{text-align:right}
@@ -121,10 +124,45 @@ function subInfo() {
   if (!sub) return { ok: true, text: "", cls: "ok" };
   const t = Date.parse(sub.trial_ends), p = sub.paid_until ? Date.parse(sub.paid_until) : 0;
   const end = Math.max(t, p), days = Math.ceil((end - Date.now()) / 864e5);
-  if (end < Date.now()) return { ok: false, text: "Abonnement expiré : lecture seule. Contactez le prestataire pour renouveler.", cls: "late" };
+  if (end < Date.now()) return { ok: false, text: "Abonnement expiré : lecture seule. Touchez « S'abonner » pour continuer.", cls: "late" };
   return { ok: true, text: (p >= t ? "Abonnement actif jusqu'au " : "Essai gratuit jusqu'au ") + fd(new Date(end).toISOString().slice(0, 10)) + " (" + days + " j)", cls: days <= 5 ? "wait" : "ok" };
 }
 const active = () => subInfo().ok;
+/* Tarifs : 1 mois 55 000 ; 2, 3 ou 6 mois à 50 000 par mois ; 1 an 550 000. Paiement Orange Money, activé à la main par l'administrateur. */
+const OM_NUM = "629 40 40 04", WA_ADMIN = "224628502301";
+const PLANS = [{ id: "1", label: "1 mois", months: 1, price: 55000, days: 30 }];
+[2, 3, 6].forEach(n => PLANS.push({ id: String(n), label: n + " mois", months: n, price: 50000 * n, days: 30 * n }));
+PLANS.push({ id: "12", label: "1 an", months: 12, price: 550000, days: 365 });
+const gnf = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " GNF";
+const planSave = p => p.months * 55000 - p.price;
+function aboView() {
+  const si = subInfo();
+  const opts = PLANS.map(p => `<option value="${p.id}"${p.months === 12 ? " selected" : ""}>${p.label} : ${gnf(p.price)}</option>`).join("");
+  dlgOpen(`<h2>S'abonner à Carnet Clair</h2>
+  ${si.text ? `<p style="margin:8px 0 0"><span class="tag ${si.cls}">${esc(si.text)}</span></p>` : ""}
+  <div class="tarifs">
+    <div><b>1 mois</b><span>${gnf(55000)}</span></div>
+    <div><b>2 mois ou plus</b><span>${gnf(50000)}<small>par mois</small></span></div>
+    <div class="best"><b>1 an</b><span>${gnf(550000)}<small>soit ${gnf(550000 / 12)} par mois</small></span></div>
+  </div>
+  <label for="ab">Votre formule</label><select id="ab">${opts}</select>
+  <div class="total" id="abt"></div>
+  <ol class="steps">
+    <li>Envoyez le montant par <b>Orange Money</b> au <b>${OM_NUM}</b>.<br><button id="abc">Copier le numéro</button></li>
+    <li>Dans le motif du transfert, écrivez votre e-mail :<br><b>${esc(user.email)}</b></li>
+    <li>Envoyez la capture du paiement par WhatsApp avec le bouton ci-dessous.</li>
+  </ol>
+  <p class="mut">Votre abonnement est activé dès que le paiement est vérifié, en général le jour même. Vos données restent intactes pendant l'attente.</p>
+  <div class="acts"><button class="p" id="abw">📲 Envoyer la capture sur WhatsApp</button><button id="no">Fermer</button></div>`);
+  { const f = document.activeElement; if (f && f.blur) f.blur(); }
+  const cur = () => PLANS.find(p => p.id === $("#ab").value) || PLANS[0];
+  const upd = () => { const p = cur(), e = planSave(p); $("#abt").innerHTML = `À payer : <b>${gnf(p.price)}</b>${p.label} d'accès${e > 0 ? " · vous économisez " + gnf(e) : ""}`; };
+  $("#ab").onchange = upd; upd();
+  $("#no").onclick = dlgClose;
+  $("#abc").onclick = () => { try { navigator.clipboard.writeText(OM_NUM.replace(/\s/g, "")); $("#abc").textContent = "Numéro copié"; } catch (e) {} };
+  $("#abw").onclick = () => { const p = cur(), t = `Bonjour, je viens de payer ${gnf(p.price)} par Orange Money pour Carnet Clair (${p.label}). Mon e-mail : ${user.email}. Voici la capture du paiement :`;
+    const a = document.createElement("a"); a.href = "https://wa.me/" + WA_ADMIN + "?text=" + encodeURIComponent(t); a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); };
+}
 
 /* ---------- Calculs ---------- */
 function calc(id) {
@@ -165,7 +203,7 @@ function resetSyn() { ["clients", "invoices", "payments"].forEach(c => { syn[c] 
 let queue = Promise.resolve();
 function save() { queue = queue.then(doSave).catch(e => { alert("Erreur d'enregistrement : " + (e.message || e)); return loadAll(false); }); return queue; }
 async function doSave() {
-  if (!active()) { alert("Abonnement expiré : lecture seule. Contactez le prestataire."); return loadAll(false); }
+  if (!active()) { alert("Abonnement expiré : lecture seule. Abonnez-vous pour continuer à enregistrer."); await loadAll(false); aboView(); return; }
   for (const col of ["clients", "invoices", "payments"]) {
     const up = [];
     allOf(col).forEach(o => { const r = row(col, o); if (syn[col][o.id] !== JSON.stringify(r)) up.push(r); });
@@ -249,7 +287,7 @@ function render() {
   if (!user) return renderAuth();
   if (locked) return renderLock();
   const si = subInfo(); let h = "";
-  const banner = si.text ? `<p style="margin:-6px 0 12px"><span class="tag ${si.cls}">${esc(si.text)}</span></p>` : "";
+  const banner = si.text ? `<p style="margin:-6px 0 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="tag ${si.cls}">${esc(si.text)}</span>${si.cls !== "ok" ? '<button class="p" id="abo" style="min-height:34px;padding:4px 12px">S\'abonner</button>' : ""}</p>` : "";
   if (!cid) {
     const sup = tab === "fournisseur", t = all(tab), list = S.clients.filter(c => (c.kind || "client") === tab);
     h += `<div class="top"><h1>Carnet Clair</h1><button id="bk">Réglages</button></div>${banner}`;
@@ -298,6 +336,7 @@ function render() {
 }
 function on(s, f) { const e = $(s); if (e) e.onclick = f; }
 function bind() {
+  on("#abo", aboView);
   on("#nc", () => clientForm(null, tab)); on("#tc", () => { tab = "client"; render(); }); on("#hm", () => { hideAmt = !hideAmt; try { localStorage.setItem("cc_hide_amounts", hideAmt ? "1" : "0"); } catch (e) {} render(); }); on("#tf", () => { tab = "fournisseur"; render(); }); on("#ec", () => clientForm(cid)); on("#back", () => { cid = null; render(); });
   on("#ni", () => invForm()); on("#np", () => payForm()); on("#rl", relance); on("#sh", shareStatement); on("#bk", settings); on("#bkx", exportJson);
   document.querySelectorAll("[data-c]").forEach(b => { b.onclick = () => { cid = b.dataset.c; render(); window.scrollTo(0, 0); }; });
@@ -507,13 +546,13 @@ function settings() {
   <label for="s1">Nom de votre boutique (sur les factures)</label><input id="s1" maxlength="120" value="${esc(S.shop)}">
   <label for="s2">Devise (lettres seulement, par exemple GNF)</label><input id="s2" value="${esc(S.cur)}" placeholder="GNF" maxlength="8">
   <p class="mut">Sauvegarde : appuyez sur « Sauvegarder mes données » chaque semaine et envoyez-vous une copie (Drive, e-mail). Pour la restaurer sur un compte vide : « Importer ».</p>
-  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="ex">Sauvegarder mes données</button><button id="im">Importer</button>${lastImport() ? '<button id="ui">Annuler le dernier import</button>' : ""}${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="tr">Corbeille${S.trash.invoices.length + S.trash.payments.length ? " (" + (S.trash.invoices.length + S.trash.payments.length) + ")" : ""}</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
+  <div class="acts"><button class="p" id="ok">Enregistrer</button><button id="sab"${active() ? "" : ' class="p"'}>S'abonner</button><button id="ex">Sauvegarder mes données</button><button id="im">Importer</button>${lastImport() ? '<button id="ui">Annuler le dernier import</button>' : ""}${isAdm ? '<button id="ad">Administration</button>' : ""}<button id="pw">Changer le mot de passe</button><button id="tr">Corbeille${S.trash.invoices.length + S.trash.payments.length ? " (" + (S.trash.invoices.length + S.trash.payments.length) + ")" : ""}</button><button id="pin">Code PIN</button>${isAdm ? '<button id="mfa">Code Authenticator</button>' : ""}<button id="lo">Se déconnecter</button><button id="no">Fermer</button></div>
   <input type="file" id="fl" accept=".json,.txt,application/json,text/plain" hidden>`);
   $("#no").onclick = dlgClose;
   $("#ok").onclick = () => { S.shop = $("#s1").value.trim(); S.cur = cleanCur($("#s2").value); dlgClose(); render(); save(); };
   $("#ex").onclick = exportJson;
   $("#im").onclick = () => $("#fl").click();
-  on("#ui", undoImport); on("#tr", trashView);
+  on("#ui", undoImport); on("#tr", trashView); on("#sab", aboView);
   $("#fl").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     const r = new FileReader();
@@ -530,6 +569,24 @@ function settings() {
   $("#pin").onclick = pinSettings;
   if (isAdm) $("#mfa").onclick = mfaSettings;
   if (isAdm) $("#ad").onclick = adminView;
+}
+/* Enregistrer un paiement d'abonnement (ou offrir 30 jours) : prolonge la date « payé jusqu'au ». */
+function adminPay(s) {
+  const base = Math.max(Date.now(), s.paid_until ? Date.parse(s.paid_until) : 0);
+  const opts = PLANS.map(p => `<option value="${p.id}">${p.label} : ${gnf(p.price)}</option>`).join("") + '<option value="gift">Offert : 30 jours gratuits</option>';
+  dlgOpen(`<h2>Enregistrer un paiement</h2><p class="mut">${esc(s.email || s.user_id)}<br>Payé jusqu'au : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"}</p>
+  <label for="apf">Formule payée</label><select id="apf">${opts}</select>
+  <div class="total" id="apt"></div>
+  <p class="mut">Vérifiez d'abord dans Orange Money que vous avez bien reçu ce montant, avec cet e-mail dans le motif.</p>
+  <div class="acts"><button class="p" id="apok">Valider</button><button id="apno">Annuler</button></div>`);
+  { const f = document.activeElement; if (f && f.blur) f.blur(); }
+  const cur = () => { const v = $("#apf").value; return v === "gift" ? { label: "30 jours offerts", price: 0, days: 30 } : PLANS.find(p => p.id === v); };
+  const upd = () => { const p = cur(); $("#apt").innerHTML = (p.price ? `Montant reçu : <b>${gnf(p.price)}</b>` : "<b>Gratuit</b>") + `Nouvel accès jusqu'au ${fd(new Date(base + p.days * 864e5).toISOString().slice(0, 10))}`; };
+  $("#apf").onchange = upd; upd();
+  $("#apno").onclick = adminView;
+  $("#apok").onclick = async () => { const p = cur();
+    const r = await sb.from("subscriptions").update({ paid_until: new Date(base + p.days * 864e5).toISOString() }).eq("user_id", s.user_id);
+    if (r.error) { alert(r.error.message); return; } adminView(); };
 }
 async function adminView() {
   try {
@@ -549,7 +606,7 @@ async function adminView() {
     const al = a ? `<span class="mut">Dernière utilisation : ${when(a.last_use)} · ${a.devices ? `<span class="tag ${a.devices > 1 ? "wait" : "ok"}">${a.devices} appareil${a.devices > 1 ? "s" : ""}</span> ${esc(a.kinds || "")}` : "aucun appareil connecté"}</span>` : "";
     const so = a && a.devices && s.user_id !== me ? `<button class="d" data-so="${s.user_id}">Déconnecter ses appareils</button>` : "";
     const t = Date.parse(s.trial_ends), p = s.paid_until ? Date.parse(s.paid_until) : 0, ok = Math.max(t, p) >= Date.now();
-    return `<div class="item" style="flex-direction:column;align-items:stretch"><b>${esc(s.email || s.user_id)}</b><span class="mut">Essai : ${fd(s.trial_ends.slice(0, 10))} · Payé : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"} <span class="tag ${ok ? "ok" : "late"}">${ok ? "Actif" : "Expiré"}</span></span>${al}<div class="acts" style="margin-top:8px"><button data-ex="${s.user_id}">+30 jours payés</button><button class="d" data-su="${s.user_id}">Suspendre</button>${so}</div></div>`;
+    return `<div class="item" style="flex-direction:column;align-items:stretch"><b>${esc(s.email || s.user_id)}</b><span class="mut">Essai : ${fd(s.trial_ends.slice(0, 10))} · Payé : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"} <span class="tag ${ok ? "ok" : "late"}">${ok ? "Actif" : "Expiré"}</span></span>${al}<div class="acts" style="margin-top:8px"><button data-ex="${s.user_id}">Enregistrer un paiement</button><button class="d" data-su="${s.user_id}">Suspendre</button>${so}</div></div>`;
   }).join("");
   const fbAt = (() => { try { return +localStorage.getItem(fbKey()) || 0; } catch (e) { return 0; } })(), fbDays = fbAt ? Math.floor((Date.now() - fbAt) / 864e5) : -1;
   const fbTxt = fbAt ? (fbDays === 0 ? "aujourd'hui" : "il y a " + fbDays + " jour" + (fbDays > 1 ? "s" : "")) : "jamais";
@@ -558,13 +615,7 @@ async function adminView() {
   <div class="list" style="margin-top:10px">${rows || '<div class="empty">Aucun abonné.</div>'}</div><div class="acts"><button id="no">Fermer</button></div>`);
   { const f = document.activeElement; if (f && f.blur) f.blur(); }
   $("#no").onclick = dlgClose; $("#fb").onclick = fullBackup; $("#fr").onclick = fullRestore;
-  document.querySelectorAll("[data-ex]").forEach(b => { b.onclick = async () => {
-    const s0 = data.find(x => x.user_id === b.dataset.ex);
-    if (!confirm("Ajouter 30 jours payés à " + (s0.email || "cet abonné") + " ?")) return;
-    const s = s0, base = Math.max(Date.now(), s.paid_until ? Date.parse(s.paid_until) : 0);
-    const r = await sb.from("subscriptions").update({ paid_until: new Date(base + 30 * 864e5).toISOString() }).eq("user_id", s.user_id);
-    if (r.error) alert(r.error.message); adminView();
-  }; });
+  document.querySelectorAll("[data-ex]").forEach(b => { b.onclick = () => adminPay(data.find(x => x.user_id === b.dataset.ex)); });
   document.querySelectorAll("[data-so]").forEach(b => { b.onclick = async () => {
     const s0 = data.find(x => x.user_id === b.dataset.so);
     if (!confirm("Déconnecter tous les appareils de " + (s0.email || "cet abonné") + " ?\n\nIl devra se reconnecter avec son e-mail et son mot de passe. Un appareil ouvert en ce moment sera déconnecté au plus tard dans l'heure. Ses données ne sont pas touchées.")) return;
