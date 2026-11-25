@@ -445,14 +445,16 @@ function invForm(id) {
     dlgClose(); render(); save();
   };
 }
-/* Texte d'une facture ou d'un reçu, lisible directement dans WhatsApp (*gras*). */
+/* Texte d'une facture ou d'un reçu, lisible directement dans WhatsApp (*gras*).
+   Les noms en arabe (ou autre écriture de droite à gauche) sont isolés pour ne pas mélanger les chiffres de la ligne. */
+const iso = t => "\u2068" + String(t == null ? "" : t) + "\u2069", ltr = t => "\u200E" + t;
 function invText(i, c) {
   const sup = c.kind === "fournisseur", L = [];
-  if (S.shop) L.push("*" + S.shop + "*");
+  if (S.shop) L.push(ltr("*" + iso(S.shop) + "*"));
   L.push((sup ? "Achat " : "Facture ") + i.no + " du " + fd(i.date));
   if (i.due) L.push("Échéance : " + fd(i.due));
-  L.push((sup ? "Fournisseur : " : "Client : ") + c.name, "");
-  i.items.forEach(l => L.push("• " + l.d + " : " + l.q + " × " + fmt(l.p) + " = " + fmt(l.q * l.p)));
+  L.push((sup ? "Fournisseur : " : "Client : ") + iso(c.name), "");
+  i.items.forEach(l => L.push(ltr("• " + iso(l.d) + "\u200E : " + l.q + " × " + fmt(l.p) + " = " + fmt(l.q * l.p))));
   L.push("", "*Total : " + fmt(i.total) + "*");
   if (i.paid > 0) L.push("Déjà payé : " + fmt(i.paid));
   L.push(i.rest > 0 ? "*Reste à payer : " + fmt(i.rest) + "*" : "✅ Facture entièrement payée");
@@ -462,10 +464,10 @@ function invText(i, c) {
 }
 function payText(p, c, x) {
   const sup = c.kind === "fournisseur", L = [];
-  if (S.shop) L.push("*" + S.shop + "*");
-  L.push((sup ? "Paiement au fournisseur du " : "Reçu de paiement du ") + fd(p.date), (sup ? "Fournisseur : " : "Client : ") + c.name, "");
+  if (S.shop) L.push(ltr("*" + iso(S.shop) + "*"));
+  L.push((sup ? "Paiement au fournisseur du " : "Reçu de paiement du ") + fd(p.date), (sup ? "Fournisseur : " : "Client : ") + iso(c.name), "");
   L.push("Montant " + (sup ? "payé" : "reçu") + " : *" + fmt(p.amt) + "*", "Mode : " + p.method);
-  if (p.note) L.push("Note : " + p.note);
+  if (p.note) L.push("Note : " + iso(p.note));
   L.push("", x.due > 0 ? "*Reste à payer : " + fmt(x.due) + "*" : "✅ Compte soldé, plus rien à payer");
   if (c.share) L.push("", "Votre relevé complet : " + location.origin + location.pathname + "#/r/" + c.share);
   L.push("", "Merci !");
@@ -490,9 +492,9 @@ function invView(id) {
   <div class="acts"><button class="p" id="dl">Télécharger la facture PDF</button><button id="it">💬 Envoyer en texte (WhatsApp)</button><button id="iw">📲 Envoyer la facture PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => invForm(id);
   const tel = (c.phone || "").replace(/\D/g, ""), fname = "facture-" + i.no + ".pdf";
-  $("#it").onclick = () => textSend((curKind() === "fournisseur" ? "Achat " : "Facture ") + i.no + " en texte", invText(i, c), tel, "invt:" + i.id, (c.kind === "fournisseur" ? "Cet achat " : "Cette facture ") + i.no + " en texte", () => invView(id));
+  $("#it").onclick = () => textSend((curKind() === "fournisseur" ? "Achat " : "Facture ") + i.no + " en texte", invText(i, c), tel, "invt:" + i.id, (c.kind === "fournisseur" ? "achat " : "facture ") + i.no + " en texte", () => invView(id));
   $("#dl").onclick = async () => { const d = await invoicePdf(i, c); if (d) saveFile(pdfFile(d, fname)); };
-  $("#iw").onclick = async () => { if (!sendAgain("inv:" + i.id, (c.kind === "fournisseur" ? "Cet achat " : "Cette facture ") + i.no, tel)) return; const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
+  $("#iw").onclick = async () => { if (!sendAgain("inv:" + i.id, (c.kind === "fournisseur" ? "achat " : "facture ") + i.no + " (PDF)", tel)) return; const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
   $("#del").onclick = () => { if (confirm("Mettre cette facture à la corbeille ?\n\nVous pourrez la récupérer pendant 30 jours : Réglages, puis Corbeille.")) { toTrash("invoices", id); dlgClose(); render(); save(); } };
 }
 function payForm(id) {
@@ -525,9 +527,9 @@ function payView(id) {
   <div class="acts"><button class="p" id="rd">Télécharger le reçu PDF</button><button id="rt">💬 Envoyer en texte (WhatsApp)</button><button id="rw">📲 Envoyer le reçu PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
   const a = document.activeElement; if (a && a.blur) a.blur();
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => payForm(id);
-  $("#rt").onclick = () => textSend(sup ? "Paiement en texte" : "Reçu en texte", payText(p, c, x), tel, "payt:" + p.id, "Ce reçu de " + fmt(p.amt) + " du " + fd(p.date) + " en texte", () => payView(id));
+  $("#rt").onclick = () => textSend(sup ? "Paiement en texte" : "Reçu en texte", payText(p, c, x), tel, "payt:" + p.id, "reçu de " + fmt(p.amt) + " du " + fd(p.date) + " en texte", () => payView(id));
   $("#rd").onclick = async () => { const d = await receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
-  $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "Ce reçu de " + fmt(p.amt) + " du " + fd(p.date), tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
+  $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "reçu de " + fmt(p.amt) + " du " + fd(p.date) + " (PDF)", tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
   $("#del").onclick = () => { if (confirm("Mettre ce paiement à la corbeille ?\n\nVous pourrez le récupérer pendant 30 jours : Réglages, puis Corbeille.")) { toTrash("payments", id); dlgClose(); render(); save(); } };
 }
 function relance() {
@@ -992,7 +994,7 @@ function sendAgain(key, label, tel) {
     const last = l[l.length - 1], d = new Date(last.t);
     const when = fd(d.toISOString().slice(0, 10)) + " à " + String(d.getHours()).padStart(2, "0") + "h" + String(d.getMinutes()).padStart(2, "0");
     const same = (last.tel || "") === (tel || "");
-    if (!confirm(label + " a déjà été envoyé" + (l.length > 1 ? " " + l.length + " fois" : "") + " (dernier envoi le " + when + (last.tel ? ", au " + last.tel : "") + ")." + (same ? " C'est le même numéro." : "") + " L'envoyer encore ?")) return false;
+    if (!confirm("Déjà envoyé" + (l.length > 1 ? " " + l.length + " fois" : "") + " : " + label + "\nDernier envoi le " + when + (last.tel ? ", au " + last.tel : "") + "." + (same ? " C'est le même numéro." : "") + "\n\nL'envoyer encore ?")) return false;
   }
   l.push({ t: Date.now(), tel: tel || "" }); log[key] = l.slice(-5);
   const keys = Object.keys(log); if (keys.length > 800) keys.sort((a, b) => log[a][log[a].length - 1].t - log[b][log[b].length - 1].t).slice(0, keys.length - 800).forEach(k => delete log[k]);
@@ -1007,7 +1009,7 @@ function showReceipt(pid, again) {
   <div class="acts"><button class="p" id="rw">📲 Envoyer le reçu PDF sur WhatsApp</button><button id="rd">Télécharger le reçu PDF</button><button id="no">Fermer</button></div>`);
   $("#no").onclick = dlgClose;
   $("#rd").onclick = async () => { const d = await receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
-  $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "Ce reçu de " + fmt(p.amt) + " du " + fd(p.date), tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
+  $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "reçu de " + fmt(p.amt) + " du " + fd(p.date) + " (PDF)", tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
 }
 
 /* ---------- Mot de passe oublié / changement ---------- */
