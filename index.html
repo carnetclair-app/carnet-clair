@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://mphphohljjpqjwnrpuld.supabase.co wss://mphphohljjpqjwnrpuld.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
-<meta name="carnet-clair-version" content="2026-11-24">
+<meta name="carnet-clair-version" content="2026-11-25">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -201,9 +201,29 @@ function counters() {
 function resetSyn() { ["clients", "invoices", "payments"].forEach(c => { syn[c] = {}; allOf(c).forEach(o => { syn[c][o.id] = JSON.stringify(row(c, o)); }); }); }
 
 let queue = Promise.resolve();
+function refreshQuiet() { queue = queue.then(() => loadAll(false, true)).catch(() => {}); return queue; }
 function save() { queue = queue.then(doSave).catch(e => { alert("Erreur d'enregistrement : " + (e.message || e)); return loadAll(false); }); return queue; }
+/* Plusieurs téléphones sur le même compte : avant d'envoyer une nouvelle facture, on vérifie sur le serveur
+   que son numéro n'a pas déjà été donné par un autre téléphone ; sinon on lui donne le suivant libre. */
+async function fixNewNumbers() {
+  const fresh = S.invoices.filter(i => !syn.invoices[i.id] && /^([FA]\d{4})-(\d+)$/.test(String(i.no || "")));
+  if (!fresh.length) return [];
+  const [a, b] = await Promise.all([sb.from("invoices").select("id,no"), sb.from("profiles").select("counters").eq("user_id", user.id).maybeSingle()]);
+  if (a.error) throw a.error;
+  const srv = (b.data && b.data.counters) || {}, used = {}, top = Object.assign({}, srv), changed = [];
+  (a.data || []).forEach(r => { used[r.no] = r.id; const m = /^([FA]\d{4})-(\d+)$/.exec(String(r.no || "")); if (m && +m[2] > (+top[m[1]] || 0)) top[m[1]] = +m[2]; });
+  fresh.sort((x, y) => String(x.no).localeCompare(String(y.no), "fr", { numeric: true })).forEach(i => {
+    const m = /^([FA]\d{4})-(\d+)$/.exec(i.no), taken = (used[i.no] && used[i.no] !== i.id) || +m[2] <= (+srv[m[1]] || 0);
+    if (taken) { const old = i.no; top[m[1]] = (+top[m[1]] || 0) + 1; i.no = m[1] + "-" + String(top[m[1]]).padStart(3, "0"); changed.push(old + " → " + i.no); }
+    else if (+m[2] > (+top[m[1]] || 0)) top[m[1]] = +m[2];
+    used[i.no] = i.id;
+  });
+  S.counters = Object.assign({}, S.counters, top);
+  return changed;
+}
 async function doSave() {
   if (!active()) { alert("Abonnement expiré : lecture seule. Abonnez-vous pour continuer à enregistrer."); await loadAll(false); aboView(); return; }
+  const renum = await fixNewNumbers();
   for (const col of ["clients", "invoices", "payments"]) {
     const up = [];
     allOf(col).forEach(o => { const r = row(col, o); if (syn[col][o.id] !== JSON.stringify(r)) up.push(r); });
@@ -214,11 +234,15 @@ async function doSave() {
     if (del.length) { const { error } = await sb.from(col).delete().in("id", del); if (error) throw error; del.forEach(id => { delete syn[col][id]; }); }
   }
   S.counters = counters();
+  /* Garder le plus grand compteur entre ce téléphone et le serveur (un autre téléphone a pu avancer). */
+  try { const pr = await sb.from("profiles").select("counters").eq("user_id", user.id).maybeSingle(); const sc = (pr.data && pr.data.counters) || {}; Object.keys(sc).forEach(k => { if ((+sc[k] || 0) > (+S.counters[k] || 0)) S.counters[k] = +sc[k]; }); } catch (e) {}
   const c = JSON.stringify({ shop: S.shop, cur: S.cur, counters: S.counters });
   if (c !== cfgS) { const { error } = await sb.from("profiles").upsert({ user_id: user.id, shop: S.shop, cur: S.cur, counters: S.counters }); if (error) throw error; cfgS = c; }
+  if (renum.length) { render(); alert("Un autre téléphone de ce compte a déjà utilisé ce numéro de facture. Nouveau numéro : " + renum.join(", ") + "."); }
 }
 
-async function loadAll(first) {
+let lastSig = "";
+async function loadAll(first, quiet) {
   if (mfaPending) return; /* tant que le code Authenticator n'est pas validé, aucune donnée n'est chargée */
   if (first) app('<p class="mut">Chargement…</p>');
   const r = await Promise.all([
@@ -237,7 +261,10 @@ async function loadAll(first) {
   const p = r[3].data; S.shop = p ? p.shop : ""; S.cur = p ? cleanCur(p.cur) : "GNF";
   S.counters = p && p.counters && typeof p.counters === "object" ? p.counters : {}; cfgS = JSON.stringify({ shop: S.shop, cur: S.cur, counters: S.counters });
   sub = r[4].data; isAdm = !!r[5].data;
-  resetSyn(); render();
+  resetSyn();
+  if (cid && !S.clients.some(c => c.id === cid)) cid = null; /* client supprimé sur l'autre téléphone */
+  const sig = JSON.stringify([S.clients, S.invoices, S.payments, S.trash, S.shop, S.cur, sub]);
+  if (!(quiet && sig === lastSig)) render(); lastSig = sig;
   /* Corbeille : ce qui y est depuis plus de 30 jours est supprimé pour de bon. */
   const lim = Date.now() - 30 * 864e5, old = x => Date.parse(x.del) < lim;
   if (active() && (S.trash.invoices.some(old) || S.trash.payments.some(old))) { S.trash.invoices = S.trash.invoices.filter(x => !old(x)); S.trash.payments = S.trash.payments.filter(x => !old(x)); save(); }
@@ -418,15 +445,52 @@ function invForm(id) {
     dlgClose(); render(); save();
   };
 }
+/* Texte d'une facture ou d'un reçu, lisible directement dans WhatsApp (*gras*). */
+function invText(i, c) {
+  const sup = c.kind === "fournisseur", L = [];
+  if (S.shop) L.push("*" + S.shop + "*");
+  L.push((sup ? "Achat " : "Facture ") + i.no + " du " + fd(i.date));
+  if (i.due) L.push("Échéance : " + fd(i.due));
+  L.push((sup ? "Fournisseur : " : "Client : ") + c.name, "");
+  i.items.forEach(l => L.push("• " + l.d + " : " + l.q + " × " + fmt(l.p) + " = " + fmt(l.q * l.p)));
+  L.push("", "*Total : " + fmt(i.total) + "*");
+  if (i.paid > 0) L.push("Déjà payé : " + fmt(i.paid));
+  L.push(i.rest > 0 ? "*Reste à payer : " + fmt(i.rest) + "*" : "✅ Facture entièrement payée");
+  if (c.share) L.push("", "Votre relevé complet : " + location.origin + location.pathname + "#/r/" + c.share);
+  L.push("", "Merci de votre confiance.");
+  return L.join("\n");
+}
+function payText(p, c, x) {
+  const sup = c.kind === "fournisseur", L = [];
+  if (S.shop) L.push("*" + S.shop + "*");
+  L.push((sup ? "Paiement au fournisseur du " : "Reçu de paiement du ") + fd(p.date), (sup ? "Fournisseur : " : "Client : ") + c.name, "");
+  L.push("Montant " + (sup ? "payé" : "reçu") + " : *" + fmt(p.amt) + "*", "Mode : " + p.method);
+  if (p.note) L.push("Note : " + p.note);
+  L.push("", x.due > 0 ? "*Reste à payer : " + fmt(x.due) + "*" : "✅ Compte soldé, plus rien à payer");
+  if (c.share) L.push("", "Votre relevé complet : " + location.origin + location.pathname + "#/r/" + c.share);
+  L.push("", "Merci !");
+  return L.join("\n");
+}
+function textSend(title, text, tel, key, label, back) {
+  dlgOpen(`<h2>${esc(title)}</h2><p class="mut">Le client lit tout directement dans WhatsApp, sans ouvrir de PDF. Vous pouvez modifier le texte avant l'envoi.</p>
+  <textarea id="m" rows="15">${esc(text)}</textarea>
+  <div class="acts">${tel ? '<button class="p" id="wa">📲 Envoyer par WhatsApp</button>' : ""}<button id="cp">Copier</button><button id="bk2">Retour</button></div>
+  ${tel ? "" : '<p class="mut">Ajoutez un numéro de téléphone à ce client pour envoyer directement. Sinon : Copier, puis collez dans WhatsApp.</p>'}`);
+  { const f = document.activeElement; if (f && f.blur) f.blur(); }
+  $("#bk2").onclick = back;
+  $("#cp").onclick = () => { try { navigator.clipboard.writeText($("#m").value); $("#cp").textContent = "Copié"; } catch (e) { $("#m").select(); } };
+  if (tel) $("#wa").onclick = () => { if (!sendAgain(key, label, tel)) return; const a = document.createElement("a"); a.href = "https://wa.me/" + tel + "?text=" + encodeURIComponent($("#m").value); a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); };
+}
 function invView(id) {
   const i = calc(cid).inv.find(i => i.id === id), c = S.clients.find(c => c.id === cid);
   const rows = i.items.map(l => `<tr><td>${esc(l.d)}</td><td>${l.q} × ${fmt(l.p)}</td><td>${fmt(l.q * l.p)}</td></tr>`).join("");
   dlgOpen(`<div id="inv"><h2>${curKind() === "fournisseur" ? "Achat" : "Facture"} ${esc(i.no)}</h2><p class="mut">${esc(S.shop)}<br>${curKind() === "fournisseur" ? "Fournisseur" : "Client"} : ${esc(c.name)}<br>Date : ${fd(i.date)}${i.due ? " · Échéance : " + fd(i.due) : ""}</p>
   <div class="wrap"><table><tr><th>Article</th><th>Détail</th><th>Montant</th></tr>${rows}</table></div>
   <p class="amt">Total : ${fmt(i.total)}<br>Payé : ${fmt(i.paid)}<br>Reste : <span class="${!i.rest ? "" : i.st[1] === "late" ? "c-r" : "c-o"}">${fmt(i.rest)}</span> <span class="tag ${i.st[1]}">${i.st[0]}</span></p></div>
-  <div class="acts"><button class="p" id="dl">Télécharger la facture PDF</button><button id="iw">📲 Envoyer la facture PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
+  <div class="acts"><button class="p" id="dl">Télécharger la facture PDF</button><button id="it">💬 Envoyer en texte (WhatsApp)</button><button id="iw">📲 Envoyer la facture PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => invForm(id);
   const tel = (c.phone || "").replace(/\D/g, ""), fname = "facture-" + i.no + ".pdf";
+  $("#it").onclick = () => textSend((curKind() === "fournisseur" ? "Achat " : "Facture ") + i.no + " en texte", invText(i, c), tel, "invt:" + i.id, (c.kind === "fournisseur" ? "Cet achat " : "Cette facture ") + i.no + " en texte", () => invView(id));
   $("#dl").onclick = async () => { const d = await invoicePdf(i, c); if (d) saveFile(pdfFile(d, fname)); };
   $("#iw").onclick = async () => { if (!sendAgain("inv:" + i.id, (c.kind === "fournisseur" ? "Cet achat " : "Cette facture ") + i.no, tel)) return; const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
   $("#del").onclick = () => { if (confirm("Mettre cette facture à la corbeille ?\n\nVous pourrez la récupérer pendant 30 jours : Réglages, puis Corbeille.")) { toTrash("invoices", id); dlgClose(); render(); save(); } };
@@ -458,9 +522,10 @@ function payView(id) {
   const sup = c.kind === "fournisseur", x = calc(c.id), tel = (c.phone || "").replace(/\D/g, ""), fname = "recu-" + p.date + "-" + p.id.slice(0, 6) + ".pdf";
   dlgOpen(`<div id="inv"><h2>${sup ? "Paiement au fournisseur" : "Reçu de paiement"}</h2><p class="mut">${esc(S.shop)}<br>${sup ? "Fournisseur" : "Client"} : ${esc(c.name)}<br>Date : ${fd(p.date)} · Mode : ${esc(p.method)}${p.note ? "<br>Note : " + esc(p.note) : ""}</p>
   <p class="amt">Montant payé : <span class="c-g">${fmt(p.amt)}</span><br>${sup ? "Reste à payer au fournisseur" : "Reste à payer"} : <span class="${x.late ? "c-r" : x.due ? "c-o" : ""}">${fmt(x.due)}</span></p></div>
-  <div class="acts"><button class="p" id="rd">Télécharger le reçu PDF</button><button id="rw">📲 Envoyer le reçu PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
+  <div class="acts"><button class="p" id="rd">Télécharger le reçu PDF</button><button id="rt">💬 Envoyer en texte (WhatsApp)</button><button id="rw">📲 Envoyer le reçu PDF sur WhatsApp</button><button id="ed">Modifier</button><button id="pr">Imprimer</button><button id="no">Fermer</button><button class="d" id="del">Supprimer</button></div>`);
   const a = document.activeElement; if (a && a.blur) a.blur();
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => payForm(id);
+  $("#rt").onclick = () => textSend(sup ? "Paiement en texte" : "Reçu en texte", payText(p, c, x), tel, "payt:" + p.id, "Ce reçu de " + fmt(p.amt) + " du " + fd(p.date) + " en texte", () => payView(id));
   $("#rd").onclick = async () => { const d = await receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
   $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "Ce reçu de " + fmt(p.amt) + " du " + fd(p.date), tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
   $("#del").onclick = () => { if (confirm("Mettre ce paiement à la corbeille ?\n\nVous pourrez le récupérer pendant 30 jours : Réglages, puis Corbeille.")) { toTrash("payments", id); dlgClose(); render(); save(); } };
@@ -572,32 +637,40 @@ function settings() {
 }
 /* Enregistrer un paiement d'abonnement (ou offrir 30 jours) : prolonge la date « payé jusqu'au ». */
 function adminPay(s) {
-  const base = Math.max(Date.now(), s.paid_until ? Date.parse(s.paid_until) : 0);
+  /* L'abonnement commence à la fin de l'essai ou de la période déjà payée : le commerçant ne perd aucun jour. */
+  const base = Math.max(Date.now(), s.paid_until ? Date.parse(s.paid_until) : 0, Date.parse(s.trial_ends) || 0);
   const opts = PLANS.map(p => `<option value="${p.id}">${p.label} : ${gnf(p.price)}</option>`).join("") + '<option value="gift">Offert : 30 jours gratuits</option>';
   dlgOpen(`<h2>Enregistrer un paiement</h2><p class="mut">${esc(s.email || s.user_id)}<br>Payé jusqu'au : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"}</p>
   <label for="apf">Formule payée</label><select id="apf">${opts}</select>
   <div class="total" id="apt"></div>
-  <p class="mut">Vérifiez d'abord dans Orange Money que vous avez bien reçu ce montant, avec cet e-mail dans le motif.</p>
+  <p class="mut" id="apm"></p>
   <div class="acts"><button class="p" id="apok">Valider</button><button id="apno">Annuler</button></div>`);
   { const f = document.activeElement; if (f && f.blur) f.blur(); }
   const cur = () => { const v = $("#apf").value; return v === "gift" ? { label: "30 jours offerts", price: 0, days: 30 } : PLANS.find(p => p.id === v); };
-  const upd = () => { const p = cur(); $("#apt").innerHTML = (p.price ? `Montant reçu : <b>${gnf(p.price)}</b>` : "<b>Gratuit</b>") + `Nouvel accès jusqu'au ${fd(new Date(base + p.days * 864e5).toISOString().slice(0, 10))}`; };
+  const upd = () => { const p = cur(); $("#apt").innerHTML = (p.price ? `Montant reçu : <b>${gnf(p.price)}</b>` : "<b>Gratuit</b>") + `Nouvel accès jusqu'au ${fd(new Date(base + p.days * 864e5).toISOString().slice(0, 10))}`;
+    $("#apm").textContent = p.price ? "Vérifiez d'abord dans Orange Money que vous avez bien reçu ce montant, avec cet e-mail dans le motif." : "Cadeau : aucun paiement à vérifier."; };
   $("#apf").onchange = upd; upd();
   $("#apno").onclick = adminView;
   $("#apok").onclick = async () => { const p = cur();
     const r = await sb.from("subscriptions").update({ paid_until: new Date(base + p.days * 864e5).toISOString() }).eq("user_id", s.user_id);
     if (r.error) { alert(r.error.message); return; } adminView(); };
 }
+/* Administration : affiche « Chargement… » tout de suite, et le message exact si quelque chose échoue. */
 async function adminView() {
+  dlgOpen('<h2>Administration</h2><p class="mut">Chargement…</p>');
+  try { await adminView0(); }
+  catch (e) { dlgOpen(`<h2>Administration</h2><p class="mut">Erreur : ${esc(e && e.message || String(e))}</p><p class="mut">Vérifiez la connexion Internet puis réessayez. Si l'erreur revient, envoyez une capture de cet écran.</p><div class="acts"><button class="p" id="rt">Réessayer</button><button id="no">Fermer</button></div>`); $("#rt").onclick = adminView; $("#no").onclick = dlgClose; }
+}
+async function adminView0() {
   try {
     const lv = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
     if (lv.error || !lv.data || lv.data.currentLevel !== "aal2") return adminStepUp();
   } catch (e) { return adminStepUp(); }
   const { data, error } = await sb.from("subscriptions").select("*").order("created_at", { ascending: false });
-  if (error) { alert(error.message); return; }
+  if (error) throw error;
   /* Dernière utilisation et appareils (fonction admin_activity, réservée à l'administrateur avec code Authenticator). */
   const act = {};
-  try { const a = await sb.rpc("admin_activity"); if (!a.error && Array.isArray(a.data)) a.data.forEach(r => { act[r.user_id] = r; }); } catch (e) {}
+  try { const a = await Promise.race([sb.rpc("admin_activity"), new Promise(r => setTimeout(() => r({ error: { message: "délai dépassé" } }), 10000))]); if (!a.error && Array.isArray(a.data)) a.data.forEach(r => { act[r.user_id] = r; }); } catch (e) {}
   const when = ts => { if (!ts) return "jamais"; const d = new Date(ts), day = d.toISOString().slice(0, 10), y = new Date(Date.now() - 864e5).toISOString().slice(0, 10), h = String(d.getHours()).padStart(2, "0") + "h" + String(d.getMinutes()).padStart(2, "0");
     return (day === today() ? "aujourd'hui" : day === y ? "hier" : "le " + fd(day)) + " à " + h; };
   const me = user ? user.id : "";
@@ -605,8 +678,8 @@ async function adminView() {
     const a = act[s.user_id];
     const al = a ? `<span class="mut">Dernière utilisation : ${when(a.last_use)} · ${a.devices ? `<span class="tag ${a.devices > 1 ? "wait" : "ok"}">${a.devices} appareil${a.devices > 1 ? "s" : ""}</span> ${esc(a.kinds || "")}` : "aucun appareil connecté"}</span>` : "";
     const so = a && a.devices && s.user_id !== me ? `<button class="d" data-so="${s.user_id}">Déconnecter ses appareils</button>` : "";
-    const t = Date.parse(s.trial_ends), p = s.paid_until ? Date.parse(s.paid_until) : 0, ok = Math.max(t, p) >= Date.now();
-    return `<div class="item" style="flex-direction:column;align-items:stretch"><b>${esc(s.email || s.user_id)}</b><span class="mut">Essai : ${fd(s.trial_ends.slice(0, 10))} · Payé : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"} <span class="tag ${ok ? "ok" : "late"}">${ok ? "Actif" : "Expiré"}</span></span>${al}<div class="acts" style="margin-top:8px"><button data-ex="${s.user_id}">Enregistrer un paiement</button><button class="d" data-su="${s.user_id}">Suspendre</button>${so}</div></div>`;
+    const t = Date.parse(s.trial_ends) || 0, p = s.paid_until ? Date.parse(s.paid_until) : 0, ok = Math.max(t, p) >= Date.now();
+    return `<div class="item" style="flex-direction:column;align-items:stretch"><b>${esc(s.email || s.user_id)}</b><span class="mut">Essai : ${s.trial_ends ? fd(s.trial_ends.slice(0, 10)) : "?"} · Payé : ${s.paid_until ? fd(s.paid_until.slice(0, 10)) : "non"} <span class="tag ${ok ? "ok" : "late"}">${ok ? "Actif" : "Expiré"}</span></span>${al}<div class="acts" style="margin-top:8px"><button data-ex="${s.user_id}">Enregistrer un paiement</button><button class="d" data-su="${s.user_id}">Suspendre</button>${so}</div></div>`;
   }).join("");
   const fbAt = (() => { try { return +localStorage.getItem(fbKey()) || 0; } catch (e) { return 0; } })(), fbDays = fbAt ? Math.floor((Date.now() - fbAt) / 864e5) : -1;
   const fbTxt = fbAt ? (fbDays === 0 ? "aujourd'hui" : "il y a " + fbDays + " jour" + (fbDays > 1 ? "s" : "")) : "jamais";
@@ -1193,8 +1266,10 @@ function boot() {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) { hiddenAt = Date.now(); return; }
     if (user && !locked && !mfaPending && getPin() && hiddenAt && Date.now() - hiddenAt > 120000) { locked = true; if ($("#dlg").open) $("#dlg").close(); render(); return; }
-    if (user && !locked && !mfaPending && !$("#dlg").open) queue = queue.then(() => loadAll(false));
+    if (user && !locked && !mfaPending && !$("#dlg").open) refreshQuiet();
   });
+  /* Toutes les 2 minutes, si l'application est ouverte et qu'aucune fenêtre n'est en cours : voir ce que l'autre téléphone a enregistré. */
+  setInterval(() => { if (!document.hidden && user && !locked && !mfaPending && !$("#dlg").open) refreshQuiet(); }, 120000);
 }
 boot();
 if ('serviceWorker' in navigator) { window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); }); }
