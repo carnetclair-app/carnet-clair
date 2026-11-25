@@ -481,7 +481,7 @@ function textSend(title, text, tel, key, label, back) {
   { const f = document.activeElement; if (f && f.blur) f.blur(); }
   $("#bk2").onclick = back;
   $("#cp").onclick = () => { try { navigator.clipboard.writeText($("#m").value); $("#cp").textContent = "Copié"; } catch (e) { $("#m").select(); } };
-  if (tel) $("#wa").onclick = () => { if (!sendAgain(key, label, tel)) return; const a = document.createElement("a"); a.href = "https://wa.me/" + tel + "?text=" + encodeURIComponent($("#m").value); a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); };
+  if (tel) $("#wa").onclick = ev => { if (!armSend(ev.currentTarget, key, label, tel)) return; const a = document.createElement("a"); a.href = "https://wa.me/" + tel + "?text=" + encodeURIComponent($("#m").value); a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); };
 }
 function invView(id) {
   const i = calc(cid).inv.find(i => i.id === id), c = S.clients.find(c => c.id === cid);
@@ -494,7 +494,7 @@ function invView(id) {
   const tel = (c.phone || "").replace(/\D/g, ""), fname = "facture-" + i.no + ".pdf";
   $("#it").onclick = () => textSend((curKind() === "fournisseur" ? "Achat " : "Facture ") + i.no + " en texte", invText(i, c), tel, "invt:" + i.id, (c.kind === "fournisseur" ? "achat " : "facture ") + i.no + " en texte", () => invView(id));
   $("#dl").onclick = async () => { const d = await invoicePdf(i, c); if (d) saveFile(pdfFile(d, fname)); };
-  $("#iw").onclick = async () => { if (!sendAgain("inv:" + i.id, (c.kind === "fournisseur" ? "achat " : "facture ") + i.no + " (PDF)", tel)) return; const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
+  $("#iw").onclick = async ev => { if (!armSend(ev.currentTarget, "inv:" + i.id, (c.kind === "fournisseur" ? "achat " : "facture ") + i.no + " (PDF)", tel)) return; const d = await invoicePdf(i, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici ${c.kind === "fournisseur" ? "le détail de l'achat " : "votre facture "}${i.no} de ${fmt(i.total)}${S.shop ? " (" + S.shop + ")" : ""}.`, tel); };
   $("#del").onclick = () => { if (confirm("Mettre cette facture à la corbeille ?\n\nVous pourrez la récupérer pendant 30 jours : Réglages, puis Corbeille.")) { toTrash("invoices", id); dlgClose(); render(); save(); } };
 }
 function payForm(id) {
@@ -529,7 +529,7 @@ function payView(id) {
   $("#no").onclick = dlgClose; $("#pr").onclick = () => window.print(); $("#ed").onclick = () => payForm(id);
   $("#rt").onclick = () => textSend(sup ? "Paiement en texte" : "Reçu en texte", payText(p, c, x), tel, "payt:" + p.id, "reçu de " + fmt(p.amt) + " du " + fd(p.date) + " en texte", () => payView(id));
   $("#rd").onclick = async () => { const d = await receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
-  $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "reçu de " + fmt(p.amt) + " du " + fd(p.date) + " (PDF)", tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
+  $("#rw").onclick = async ev => { if (!armSend(ev.currentTarget, "pay:" + p.id, "reçu de " + fmt(p.amt) + " du " + fd(p.date) + " (PDF)", tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
   $("#del").onclick = () => { if (confirm("Mettre ce paiement à la corbeille ?\n\nVous pourrez le récupérer pendant 30 jours : Réglages, puis Corbeille.")) { toTrash("payments", id); dlgClose(); render(); save(); } };
 }
 function relance() {
@@ -988,18 +988,30 @@ async function sharePdf(file, text, tel) {
 /* Envois WhatsApp déjà faits (retenus sur ce téléphone) : alerte avant un nouvel envoi du même document. */
 const sentKey = () => "cc_sent_" + (user ? user.id : "");
 function sentLog() { try { return JSON.parse(localStorage.getItem(sentKey()) || "{}"); } catch (e) { return {}; } }
-function sendAgain(key, label, tel) {
+/* Un document déjà envoyé : au lieu d'une fenêtre « OK / Annuler » (qui fait bloquer WhatsApp par Chrome),
+   on affiche l'avertissement sous le bouton ; un deuxième appui sur le même bouton envoie quand même. */
+function sentWarn(key, label, tel) {
+  const l = sentLog()[key] || []; if (!l.length) return "";
+  const last = l[l.length - 1], d = new Date(last.t);
+  const when = fd(d.toISOString().slice(0, 10)) + " à " + String(d.getHours()).padStart(2, "0") + "h" + String(d.getMinutes()).padStart(2, "0");
+  return "Déjà envoyé" + (l.length > 1 ? " " + l.length + " fois" : "") + " : " + label + ". Dernier envoi le " + when + (last.tel ? ", au " + last.tel : "") + "." + ((last.tel || "") === (tel || "") ? " C'est le même numéro." : "");
+}
+function markSent(key, tel) {
   const log = sentLog(), l = log[key] || [];
-  if (l.length) {
-    const last = l[l.length - 1], d = new Date(last.t);
-    const when = fd(d.toISOString().slice(0, 10)) + " à " + String(d.getHours()).padStart(2, "0") + "h" + String(d.getMinutes()).padStart(2, "0");
-    const same = (last.tel || "") === (tel || "");
-    if (!confirm("Déjà envoyé" + (l.length > 1 ? " " + l.length + " fois" : "") + " : " + label + "\nDernier envoi le " + when + (last.tel ? ", au " + last.tel : "") + "." + (same ? " C'est le même numéro." : "") + "\n\nL'envoyer encore ?")) return false;
-  }
   l.push({ t: Date.now(), tel: tel || "" }); log[key] = l.slice(-5);
   const keys = Object.keys(log); if (keys.length > 800) keys.sort((a, b) => log[a][log[a].length - 1].t - log[b][log[b].length - 1].t).slice(0, keys.length - 800).forEach(k => delete log[k]);
   try { localStorage.setItem(sentKey(), JSON.stringify(log)); } catch (e) {}
-  return true;
+}
+function armSend(btn, key, label, tel) {
+  const w = sentWarn(key, label, tel);
+  if (w && btn && btn.dataset.armed !== "1") {
+    btn.dataset.armed = "1";
+    let m = btn.parentNode.querySelector(".sentw");
+    if (!m) { m = document.createElement("p"); m.className = "mut c-o sentw"; m.style.cssText = "width:100%;margin:4px 0"; btn.parentNode.insertBefore(m, btn); }
+    m.textContent = "⚠️ " + w + " Touchez encore ce bouton pour l'envoyer quand même.";
+    return false;
+  }
+  markSent(key, tel); return true;
 }
 function showReceipt(pid, again) {
   const p = S.payments.find(x => x.id === pid); if (!p) return;
@@ -1009,7 +1021,7 @@ function showReceipt(pid, again) {
   <div class="acts"><button class="p" id="rw">📲 Envoyer le reçu PDF sur WhatsApp</button><button id="rd">Télécharger le reçu PDF</button><button id="no">Fermer</button></div>`);
   $("#no").onclick = dlgClose;
   $("#rd").onclick = async () => { const d = await receiptPdf(p, c); if (d) saveFile(pdfFile(d, fname)); };
-  $("#rw").onclick = async () => { if (!sendAgain("pay:" + p.id, "reçu de " + fmt(p.amt) + " du " + fd(p.date) + " (PDF)", tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
+  $("#rw").onclick = async ev => { if (!armSend(ev.currentTarget, "pay:" + p.id, "reçu de " + fmt(p.amt) + " du " + fd(p.date) + " (PDF)", tel)) return; const d = await receiptPdf(p, c); if (d) sharePdf(pdfFile(d, fname), `Bonjour ${c.name}, voici votre reçu de paiement de ${fmt(p.amt)} du ${fd(p.date)}. Reste à payer : ${fmt(x.due)}. Merci !`, tel); };
 }
 
 /* ---------- Mot de passe oublié / changement ---------- */
