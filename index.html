@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://mphphohljjpqjwnrpuld.supabase.co wss://mphphohljjpqjwnrpuld.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
-<meta name="carnet-clair-version" content="2026-11-26">
+<meta name="carnet-clair-version" content="2026-11-27">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -51,7 +51,8 @@ label{display:block;font-size:14px;color:var(--mut);margin:10px 0 4px}
 dialog{border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);width:min(520px,94vw);padding:18px;max-height:90vh;overflow:auto}
 dialog::backdrop{background:rgba(0,0,0,.5)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.ln{display:grid;grid-template-columns:2fr 1fr 1.4fr;gap:6px;margin-bottom:6px}
+.ln{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px 0;border-bottom:1px solid var(--line)}.ln>input:first-child{grid-column:1/-1}
+.qs{display:flex;gap:4px;align-items:stretch}.qs input{text-align:center;min-width:0}.qs button{min-width:44px;padding:0;font-size:22px;font-weight:700;line-height:1}
 .ln input.miss{border-color:var(--r);box-shadow:0 0 0 2px var(--rt)}
 .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 .tarifs{display:grid;gap:8px;margin:12px 0}.tarifs div{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}.tarifs span{font-weight:800;text-align:right}.tarifs small{display:block;font-weight:500;color:var(--mut);font-size:13px}.tarifs .best{border:2px solid var(--g)}.tarifs .best b:after{content:'★ meilleur prix';display:block;color:var(--g);font-size:12px;font-weight:600}
@@ -413,20 +414,40 @@ function clientForm(id, kind) {
     }
   };
 }
-const lineRow = l => `<div class="ln"><input placeholder="Article" aria-label="Article" maxlength="200" value="${esc(l.d)}"><input type="number" inputmode="decimal" min="0" placeholder="Qté" aria-label="Quantité" value="${Number(l.q) || ""}"><input type="number" inputmode="decimal" min="0" placeholder="Prix unitaire" aria-label="Prix unitaire" value="${Number(l.p) || ""}"></div>`;
+const lineRow = l => `<div class="ln"><input list="artl" placeholder="Article (tapez les premières lettres)" aria-label="Article" maxlength="200" value="${esc(l.d)}"><div class="qs"><button type="button" class="qm" aria-label="Moins 1">−</button><input type="number" inputmode="decimal" min="0" placeholder="Qté" aria-label="Quantité" value="${Number(l.q) || ""}"><button type="button" class="qp" aria-label="Plus 1">+</button></div><input type="number" inputmode="decimal" min="0" placeholder="Prix unitaire" aria-label="Prix unitaire" value="${Number(l.p) || ""}"></div>`;
+/* Articles déjà utilisés, appris des factures (ou des achats pour un fournisseur), avec le dernier prix.
+   Rien à régler : la liste se remplit toute seule au fil des factures. */
+function catalog(sup) {
+  const kind = {}; S.clients.forEach(c => { kind[c.id] = c.kind || "client"; });
+  const m = {};
+  S.invoices.filter(i => (kind[i.cid] === "fournisseur") === sup).slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0)
+    .forEach(i => (i.items || []).forEach(l => { const d = String(l.d || "").trim(), k = d.toLowerCase(); if (!k) return;
+      const e = m[k] || (m[k] = { d, p: 0, n: 0, last: "" }); if (+l.p > 0) e.p = +l.p; e.n++; e.last = i.date; e.d = d; }));
+  return Object.values(m).sort((a, b) => b.n - a.n || (a.last < b.last ? 1 : a.last > b.last ? -1 : 0));
+}
 function invForm(id) {
   const ex = id ? S.invoices.find(x => x.id === id) : null, sup = curKind() === "fournisseur";
   const d30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
   const title = ex ? (sup ? "Modifier l'achat " : "Modifier la facture ") + esc(ex.no) : (sup ? "Nouvel achat " : "Nouvelle facture ") + nextNo(curKind());
   const lines = ex && ex.items.length ? ex.items.map(lineRow).join("") : lineRow({ d: "", q: 1, p: "" });
+  const cat = catalog(sup);
   dlgOpen(`<h2>${title}</h2>
   <div class="two"><div><label for="g1">Date</label><input type="date" id="g1" value="${ex ? ex.date : today()}"></div><div><label for="g2">Échéance</label><input type="date" id="g2" value="${ex ? (ex.due || "") : d30}"></div></div>
-  <label>Articles</label><div id="ls">${lines}</div><button id="al">Ajouter une ligne</button>
+  <label>Articles</label><datalist id="artl">${cat.map(a => `<option value="${esc(a.d)}">${a.p ? esc(fmt(a.p)) : ""}</option>`).join("")}</datalist><div id="ls">${lines}</div><button id="al">Ajouter une ligne</button>
   <p class="c-o" id="alm" role="alert" style="display:none;margin:6px 0 0;font-size:14px">Remplissez d'abord la dernière ligne : article, quantité et prix.</p>
-  <p class="mut">Pour retirer une ligne, videz son article ou mettez sa quantité à 0.</p>
+  <p class="mut">${cat.length ? "Tapez les premières lettres d'un article déjà " + (sup ? "acheté" : "vendu") + " : choisissez-le, son dernier prix se met tout seul. " : ""}Pour retirer une ligne, videz son article ou mettez sa quantité à 0.</p>
   <p class="amt" id="tt">Total : ${fmt(0)}</p>
   <div class="acts"><button class="p" id="ok">${ex ? "Enregistrer les modifications" : (sup ? "Enregistrer l'achat" : "Créer la facture")}</button><button id="no">Annuler</button></div>`);
   const sum = () => { let t = 0; document.querySelectorAll("#ls .ln").forEach(r => { const i = r.querySelectorAll("input"); t += (+i[1].value || 0) * (+i[2].value || 0); }); $("#tt").textContent = "Total : " + fmt(t); };
+  /* − / + : quantité moins 1 ou plus 1 (jamais en dessous de 0). */
+  $("#ls").addEventListener("click", e => { const b = e.target.closest(".qm,.qp"); if (!b) return; const q = b.parentNode.querySelector("input");
+    q.value = Math.max(0, Math.round(((+q.value || 0) + (b.classList.contains("qp") ? 1 : -1)) * 1000) / 1000); q.classList.remove("miss"); sum(); });
+  /* Toucher la quantité ou le prix sélectionne le chiffre : on tape directement le nouveau (ex. 150), sans effacer. */
+  $("#ls").addEventListener("focusin", e => { const t = e.target; if (t.type === "number") setTimeout(() => { try { t.select(); } catch (x) {} }, 0); });
+  /* Article choisi ou tapé : le dernier prix se met tout seul si le prix est vide. */
+  $("#ls").addEventListener("change", e => { const r = e.target.closest(".ln"); if (!r || e.target !== r.querySelector("input")) return;
+    const a = cat.find(x => x.d.toLowerCase() === e.target.value.trim().toLowerCase()), p = r.querySelectorAll("input")[2];
+    if (a) { e.target.value = a.d; if (!(+p.value > 0) && a.p) { p.value = a.p; p.classList.remove("miss"); sum(); } } });
   sum(); $("#ls").oninput = e => { sum(); if (e.target.classList) e.target.classList.remove("miss"); if (!document.querySelector("#ls .miss")) $("#alm").style.display = "none"; };
   /* Une nouvelle ligne seulement quand la dernière est complète (article, quantité > 0, prix > 0). */
   $("#al").onclick = () => { const rows = document.querySelectorAll("#ls .ln"); if (rows.length >= 200) { alert("200 lignes au maximum par facture."); return; }
