@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://mphphohljjpqjwnrpuld.supabase.co wss://mphphohljjpqjwnrpuld.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f4c45">
-<meta name="carnet-clair-version" content="2026-11-25">
+<meta name="carnet-clair-version" content="2026-11-26">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -447,6 +447,9 @@ function invForm(id) {
 }
 /* Texte d'une facture ou d'un reçu, lisible directement dans WhatsApp (*gras*).
    Les noms en arabe (ou autre écriture de droite à gauche) sont isolés pour ne pas mélanger les chiffres de la ligne. */
+/* Montants du texte WhatsApp : espaces insécables, pour que WhatsApp ne les prenne pas pour des numéros de téléphone
+   et ne coupe pas « 13 875 000 GNF » en fin de ligne. */
+const tfmt = n => Math.round(n).toLocaleString("fr-FR").replace(/[\u202f\u00a0 ]/g, "\u202f") + "\u00a0" + S.cur;
 const iso = t => "\u2068" + String(t == null ? "" : t) + "\u2069", ltr = t => "\u200E" + t;
 function invText(i, c) {
   const sup = c.kind === "fournisseur", L = [];
@@ -454,10 +457,10 @@ function invText(i, c) {
   L.push((sup ? "Achat " : "Facture ") + i.no + " du " + fd(i.date));
   if (i.due) L.push("Échéance : " + fd(i.due));
   L.push((sup ? "Fournisseur : " : "Client : ") + iso(c.name), "");
-  i.items.forEach(l => L.push(ltr("• " + iso(l.d) + "\u200E : " + l.q + " × " + fmt(l.p) + " = " + fmt(l.q * l.p))));
-  L.push("", "*Total : " + fmt(i.total) + "*");
-  if (i.paid > 0) L.push("Déjà payé : " + fmt(i.paid));
-  L.push(i.rest > 0 ? "*Reste à payer : " + fmt(i.rest) + "*" : "✅ Facture entièrement payée");
+  i.items.forEach(l => L.push(ltr("• " + iso(l.d) + "\u200E : " + l.q + " × " + tfmt(l.p) + " = " + tfmt(l.q * l.p))));
+  L.push("", "*Total : " + tfmt(i.total) + "*");
+  if (i.paid > 0) L.push("Déjà payé : " + tfmt(i.paid));
+  L.push(i.rest > 0 ? "*Reste à payer : " + tfmt(i.rest) + "*" : "✅ Facture entièrement payée");
   if (c.share) L.push("", "Votre relevé complet : " + location.origin + location.pathname + "#/r/" + c.share);
   L.push("", "Merci de votre confiance.");
   return L.join("\n");
@@ -466,9 +469,9 @@ function payText(p, c, x) {
   const sup = c.kind === "fournisseur", L = [];
   if (S.shop) L.push(ltr("*" + iso(S.shop) + "*"));
   L.push((sup ? "Paiement au fournisseur du " : "Reçu de paiement du ") + fd(p.date), (sup ? "Fournisseur : " : "Client : ") + iso(c.name), "");
-  L.push("Montant " + (sup ? "payé" : "reçu") + " : *" + fmt(p.amt) + "*", "Mode : " + p.method);
+  L.push("Montant " + (sup ? "payé" : "reçu") + " : *" + tfmt(p.amt) + "*", "Mode : " + p.method);
   if (p.note) L.push("Note : " + iso(p.note));
-  L.push("", x.due > 0 ? "*Reste à payer : " + fmt(x.due) + "*" : "✅ Compte soldé, plus rien à payer");
+  L.push("", x.due > 0 ? "*Reste à payer : " + tfmt(x.due) + "*" : "✅ Compte soldé, plus rien à payer");
   if (c.share) L.push("", "Votre relevé complet : " + location.origin + location.pathname + "#/r/" + c.share);
   L.push("", "Merci !");
   return L.join("\n");
